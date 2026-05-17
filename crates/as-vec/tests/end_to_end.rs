@@ -26,7 +26,7 @@ async fn build_and_query_centroid_index() {
     let (store, _) = as_store::open(&uri).expect("open store");
 
     // Tiny corpus: 6 docs, two roughly-distinct topics.
-    let docs = vec![
+    let docs = [
         ("a.md", "Kubernetes pod scheduling and node taints"),
         (
             "b.md",

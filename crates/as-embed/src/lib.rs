@@ -9,9 +9,10 @@ use as_core::{Error, Result};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum Model {
+    #[default]
     BgeSmallEnV15,
     BgeBaseEnV15,
     AllMiniLmL6V2,
@@ -40,12 +41,6 @@ impl Model {
             Model::BgeBaseEnV15 => EmbeddingModel::BGEBaseENV15,
             Model::AllMiniLmL6V2 => EmbeddingModel::AllMiniLML6V2,
         }
-    }
-}
-
-impl Default for Model {
-    fn default() -> Self {
-        Model::BgeSmallEnV15
     }
 }
 

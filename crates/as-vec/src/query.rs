@@ -148,10 +148,12 @@ impl VecIndex {
         let mut scored: Vec<(f32, u32)> = Vec::new();
         for recs in &all_records {
             for r in recs.iter() {
-                let mut s: f32 = 0.0;
-                for j in 0..dim {
-                    s += query[j] * r.vector[j];
-                }
+                let s: f32 = query
+                    .iter()
+                    .take(dim)
+                    .zip(r.vector.iter())
+                    .map(|(a, b)| a * b)
+                    .sum();
                 scored.push((s, r.doc_id));
             }
         }

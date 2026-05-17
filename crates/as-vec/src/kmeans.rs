@@ -51,8 +51,7 @@ pub fn train(vectors: &[Vec<f32>], k: usize, iters: usize) -> Result<(Vec<f32>, 
             }
             counts[cid as usize] += 1;
         }
-        for c in 0..k {
-            let cnt = counts[c];
+        for (c, &cnt) in counts.iter().enumerate() {
             if cnt == 0 {
                 continue;
             }

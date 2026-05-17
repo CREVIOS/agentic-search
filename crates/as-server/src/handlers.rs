@@ -219,7 +219,7 @@ pub async fn search(
         .map(|t| regex_escape(t))
         .collect::<Vec<_>>()
         .join("|");
-    let candidate_limit = req.k.saturating_mul(8).max(64).min(2000);
+    let candidate_limit = req.k.saturating_mul(8).clamp(64, 2000);
     let grep_req = GrepRequest {
         uri: req.uri,
         pattern,
@@ -427,5 +427,68 @@ impl axum::response::IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
         let body = serde_json::json!({ "error": self.1 });
         (self.0, Json(body)).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{fs, sync::Arc};
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn search_tokenizes_and_ranks_natural_language_query() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("a.py"),
+            "def alpha(x):\n    return x + 1\n\n\
+             def beta(x):\n    # TODO: optimize beta\n    return x * 2\n",
+        )
+        .unwrap();
+        let uri = format!("file://{}", dir.path().display());
+        let state = Arc::new(AppState::default());
+
+        let resp = search(
+            State(state),
+            Json(SearchRequest {
+                uri,
+                query: "find TODO inside beta function".to_string(),
+                k: 5,
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp.0.spans[0].symbol.as_deref(), Some("beta"));
+        assert!(resp.0.spans[0].snippet.as_deref().unwrap().contains("TODO"));
+    }
+
+    #[tokio::test]
+    async fn find_keeps_only_exact_ast_symbol_matches() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("a.py"),
+            "def beta(x):\n    return x * 2\n\n\
+             def caller():\n    beta(1)\n    # beta mention\n",
+        )
+        .unwrap();
+        let uri = format!("file://{}", dir.path().display());
+        let state = Arc::new(AppState::default());
+
+        let resp = find(
+            State(state),
+            Json(FindRequest {
+                uri,
+                symbol: "beta".to_string(),
+                max_hits: 10,
+                concurrency: 4,
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp.0.spans.len(), 1);
+        assert_eq!(resp.0.spans[0].symbol.as_deref(), Some("beta"));
+        assert_eq!(resp.0.spans[0].line_range, [1, 2]);
     }
 }

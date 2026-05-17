@@ -94,8 +94,8 @@ pub async fn build_index(
         .await?;
 
     // Cluster files.
-    for cid in 0..k {
-        let bytes = encode_cluster(&buckets[cid], dim);
+    for (cid, bucket) in buckets.iter().enumerate() {
+        let bytes = encode_cluster(bucket, dim);
         if bytes.is_empty() {
             continue;
         }
