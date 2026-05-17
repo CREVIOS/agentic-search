@@ -5,7 +5,7 @@
 //! Implements:
 //!   - `initialize`        → server capabilities + version
 //!   - `tools/list`        → enumerate `ls`, `glob`, `read`, `grep`,
-//!                            `find_symbol`, `search`
+//!     `find_symbol`, `search`
 //!   - `tools/call`        → dispatch to the same handlers used by REST
 //!   - `ping`              → liveness probe
 

@@ -11,16 +11,9 @@ use as_core::Result;
 use as_fs::Fs;
 use std::sync::Arc;
 
+#[derive(Default)]
 pub struct AppState {
     tier: TierConfig,
-}
-
-impl Default for AppState {
-    fn default() -> Self {
-        Self {
-            tier: TierConfig::default(),
-        }
-    }
 }
 
 impl AppState {

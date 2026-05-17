@@ -7,21 +7,16 @@
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SpanKind {
+    #[default]
     Line,
     Block,
     Function,
     Method,
     Class,
     Module,
-}
-
-impl Default for SpanKind {
-    fn default() -> Self {
-        Self::Line
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
