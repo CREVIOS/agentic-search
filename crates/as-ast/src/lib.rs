@@ -210,8 +210,9 @@ impl ContainerIndex {
 }
 
 /// Process-local LRU cache of `ContainerIndex` keyed by
-/// `(uri, content_hash, grammar_version)`. Bounded by entry count so
-/// memory stays predictable on large repos.
+/// `(language_id, content_hash, grammar_version)`. Identical content
+/// across multiple paths (vendored libraries, generated files) now
+/// shares one parse, which is the common case on large monorepos.
 pub struct SpanCache {
     inner: Mutex<LruCache<String, Arc<ContainerIndex>>>,
 }
@@ -225,20 +226,32 @@ impl SpanCache {
         }
     }
 
-    fn key(uri: &str, content_hash: &str) -> String {
-        format!("{GRAMMAR_VERSION}:{content_hash}:{uri}")
+    /// Cache key dropped `uri` in favour of `(grammar_version,
+    /// language_id, content_hash)` so two paths with identical bytes
+    /// share one parsed ContainerIndex. Language is part of the key
+    /// because the same byte stream could in theory be valid as two
+    /// different grammars (e.g. .ts vs .tsx); we never collide them.
+    fn key_from_lang(lang_id: &str, content_hash: &str) -> String {
+        format!("{GRAMMAR_VERSION}:{lang_id}:{content_hash}")
     }
 
-    /// Cheap probe — no parse on miss.
+    /// Cheap probe — no parse on miss. The caller hands us the URI so
+    /// we can pick the right language id; the `uri` itself does not
+    /// participate in the cache key.
     pub fn get(&self, uri: &str, content_hash: &str) -> Option<Arc<ContainerIndex>> {
-        let key = Self::key(uri, content_hash);
+        let lang = language_for_uri(uri)?;
+        let key = Self::key_from_lang(lang.id, content_hash);
         self.inner.lock().get(&key).cloned()
     }
 
     /// Get-or-build. Builds the index synchronously on miss.
     pub fn get_or_build(&self, uri: &str, bytes: &[u8]) -> Result<Option<Arc<ContainerIndex>>> {
+        let lang = match language_for_uri(uri) {
+            Some(l) => l,
+            None => return Ok(None),
+        };
         let hash = content_hash(bytes);
-        let key = Self::key(uri, &hash);
+        let key = Self::key_from_lang(lang.id, &hash);
         if let Some(v) = self.inner.lock().get(&key).cloned() {
             return Ok(Some(v));
         }
@@ -436,6 +449,26 @@ mod tests {
             .expect("rust index hit");
         assert!(Arc::ptr_eq(&idx1, &idx2), "second call must hit the cache");
         assert_eq!(idx1.containers.len(), 2);
+    }
+
+    #[test]
+    fn cache_dedups_identical_content_across_paths() {
+        // Two URIs that share bytes (typical for vendored / generated
+        // code) should share one parsed ContainerIndex.
+        let src = b"fn alpha() {}\nfn beta() {}\n";
+        let cache = SpanCache::new(8);
+        let a = cache
+            .get_or_build("file:///vendor/a.rs", src)
+            .unwrap()
+            .unwrap();
+        let b = cache
+            .get_or_build("file:///app/b.rs", src)
+            .unwrap()
+            .unwrap();
+        assert!(
+            Arc::ptr_eq(&a, &b),
+            "content-addressed cache should serve both paths"
+        );
     }
 
     #[test]
