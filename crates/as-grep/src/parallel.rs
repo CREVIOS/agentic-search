@@ -8,8 +8,9 @@
 use crate::{grep_bytes_spans, GrepOpts, Span};
 use as_core::{Error, Result};
 use as_fs::Fs;
-use futures::stream::{FuturesUnordered, StreamExt};
+use futures::stream::StreamExt;
 use std::sync::Arc;
+use tokio::task::JoinSet;
 
 #[derive(Clone, Debug)]
 pub struct ParallelOpts {
@@ -49,21 +50,24 @@ impl ParallelGrep {
         opts: &ParallelOpts,
     ) -> Result<Vec<Span>> {
         let mut listing = self.fs.list(prefix);
-        let mut in_flight: FuturesUnordered<tokio::task::JoinHandle<Result<Vec<Span>>>> =
-            FuturesUnordered::new();
+        // Using `JoinSet` so that when `scan_prefix` returns early (cap
+        // reached, error, planner dropped the future) every spawned task
+        // is aborted automatically. Previously we used `FuturesUnordered`
+        // over raw `JoinHandle`s which kept reading objects after we'd
+        // moved on — wasted S3 bytes and tokio worker time.
+        let mut in_flight: JoinSet<Result<Vec<Span>>> = JoinSet::new();
         let mut spans_all: Vec<Span> = Vec::new();
         let cap = opts.max_total_spans.unwrap_or(usize::MAX);
         let concurrency = opts.concurrency.max(1);
 
-        // Drain helper: pulls completed tasks until under the concurrency cap.
         async fn drain(
-            in_flight: &mut FuturesUnordered<tokio::task::JoinHandle<Result<Vec<Span>>>>,
+            in_flight: &mut JoinSet<Result<Vec<Span>>>,
             spans_all: &mut Vec<Span>,
             cap: usize,
             until: usize,
         ) -> Result<bool> {
             while in_flight.len() > until {
-                if let Some(joined) = in_flight.next().await {
+                if let Some(joined) = in_flight.join_next().await {
                     let spans = joined.map_err(|e| Error::Other(format!("join: {e}")))??;
                     spans_all.extend(spans);
                     if spans_all.len() >= cap {
@@ -91,17 +95,17 @@ impl ParallelGrep {
             let grep_opts = opts.grep.clone();
             let key = meta.key.clone();
 
-            in_flight.push(tokio::spawn(async move {
+            in_flight.spawn(async move {
                 let bytes = fs.read_fresh(&meta).await?;
                 grep_bytes_spans(&key, &bytes, &pattern, &grep_opts)
-            }));
+            });
 
             if drain(&mut in_flight, &mut spans_all, cap, concurrency).await? {
+                in_flight.abort_all();
                 return Ok(sort_truncate(spans_all, cap));
             }
         }
 
-        // Drain the tail.
         drain(&mut in_flight, &mut spans_all, cap, 0).await?;
         Ok(sort_truncate(spans_all, cap))
     }
