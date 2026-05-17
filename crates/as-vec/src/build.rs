@@ -59,12 +59,17 @@ pub async fn build_index(
 
     let (centroids, assignments) = kmeans::train(&vectors, k, kmeans_iters)?;
 
-    // Partition records by cluster id.
+    // Partition records by cluster id. Consume `vectors` instead of
+    // cloning each row — the previous code held the full embedding
+    // matrix in `vectors` and a duplicate of every vector in
+    // `buckets`, doubling peak memory for a corpus-sized embedding
+    // matrix. Moving each `Vec<f32>` into its bucket lets `vectors`
+    // drop empty by the end of the loop.
     let mut buckets: Vec<Vec<ClusterRecord>> = (0..k).map(|_| Vec::new()).collect();
-    for (i, &cid) in assignments.iter().enumerate() {
+    for (i, (v, &cid)) in vectors.into_iter().zip(assignments.iter()).enumerate() {
         buckets[cid as usize].push(ClusterRecord {
             doc_id: i as u32,
-            vector: vectors[i].clone(),
+            vector: v,
         });
     }
 
