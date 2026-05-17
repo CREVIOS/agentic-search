@@ -9,8 +9,6 @@ members = [
     "crates/as-cache",
     "crates/as-embed",
     "crates/as-vec",
-    "crates/as-web",
-    "crates/as-rerank",
     "crates/as-plan",
     "crates/as-server",
     "crates/as-cli",
@@ -70,8 +68,6 @@ as-ast = { path = "crates/as-ast" }
 as-cache = { path = "crates/as-cache" }
 as-embed = { path = "crates/as-embed" }
 as-vec = { path = "crates/as-vec" }
-as-web = { path = "crates/as-web" }
-as-rerank = { path = "crates/as-rerank" }
 as-plan = { path = "crates/as-plan" }
 as-server = { path = "crates/as-server" }
 

@@ -16,7 +16,6 @@ in each layer.
    - `as-grep` — `grep-searcher` linked in; range-coalesces S3 reads.
    - `as-ast` — tree-sitter spans (function/class/method).
    - `as-vec` — opt-in fastembed + centroid index for unstructured corpora.
-   - `as-web` — Exa default, Brave / Tavily fallback.
 6. **Cache** — `as-cache`: memory LRU in front of NVMe LRU in front of the
    object store. Keys: `(store, key, range)` for file ranges,
    `(prefix, pattern_hash)` for grep results, `(prefix, file_hash)` for AST
@@ -99,9 +98,13 @@ For indexed stages (`as-vec`):
 
 ## What is *not* in this architecture
 
-- A dedicated rerank model on the default path. Cross-encoder rerank is
-  available via `as-rerank` but the planner only invokes it when the user
-  enables `--rerank` or the workload is non-code.
+- A dedicated rerank model on the default path. v0.1.x ships
+  ripgrep+AST+vector only; reranker scaffolding was removed for being
+  unwired surface area.
+- A web-search tool. Same reason: the prior `as-web` adapters (Brave,
+  Tavily) were never wired into the MCP/REST surface, so the crate
+  was dropped. Wire one back in when the planner actually integrates
+  it.
 - Embedding training / fine-tuning.
 - A control plane (multi-tenant auth, billing). v1 ships single-binary
   scale-up; we revisit at v2.

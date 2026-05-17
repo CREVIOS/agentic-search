@@ -302,19 +302,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "as-rerank"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "as-core",
- "async-trait",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "as-server"
 version = "0.1.0"
 dependencies = [
@@ -389,20 +376,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "as-web"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "as-core",
- "async-trait",
- "reqwest",
- "serde",
- "serde_json",
  "tokio",
  "tracing",
 ]

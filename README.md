@@ -255,14 +255,14 @@ centroid vector path for semantic recall.
 ┌──────────────────────────────────────────────────────────────────┐
 │  SDK adapters  ·  Claude  DeepAgents  LangChain  CrewAI  OpenAI  │
 ├──────────────────────────────────────────────────────────────────┤
-│  Tool surface  ·  ls  glob  read  grep  find_symbol  search  web │
+│  Tool surface  ·  ls  glob  read  grep  find_symbol  search      │
 │                ·  delegate (sub-agent isolation)                 │
 ├──────────────────────────────────────────────────────────────────┤
 │  Planner       ·  parallel JoinSet  ·  RRF fusion  ·  dedup      │
-├───────────────┬───────────────┬────────────────┬─────────────────┤
-│  Grep         │  AST          │  Vector        │  Web            │
-│  (rg-as-lib)  │  (tree-sitter)│  (centroid)    │  (Exa/Brave/…)  │
-├───────────────┴───────────────┴────────────────┴─────────────────┤
+├──────────────────┬───────────────────┬───────────────────────────┤
+│  Grep            │  AST              │  Vector                   │
+│  (rg-as-lib)     │  (tree-sitter)    │  (centroid, opt-in)       │
+├──────────────────┴───────────────────┴───────────────────────────┤
 │  Tier cache   ·  memory LRU  →  NVMe LRU (mtime sweep)  →  store │
 ├──────────────────────────────────────────────────────────────────┤
 │  Object store ·  s3 · r2 · gcs · s3-files · mountpoint · file    │
@@ -281,8 +281,6 @@ Crate-level breakdown in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | `as-cache`    | Tiered cache: memory LRU → NVMe LRU with mtime sweep      |
 | `as-embed`    | fastembed-rs (ONNX, BGE-small-en)                         |
 | `as-vec`      | Centroid (clustered) vector index on object storage       |
-| `as-web`      | Web tool (Exa default, Brave/Tavily fallback)             |
-| `as-rerank`   | Optional reranker stage                                   |
 | `as-plan`     | Planner: parallel fan-out, stage budgets, RRF fusion      |
 | `as-server`   | REST + MCP stdio server                                   |
 | `as-cli`      | `agentic-search` binary                                   |

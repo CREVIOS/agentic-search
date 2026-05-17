@@ -36,8 +36,6 @@ pub enum SourceStage {
     Ast,
     /// Centroid vector ANN.
     Vector,
-    /// Web search adapter (Brave / Tavily / Exa).
-    Web,
     /// Fused result from `as-plan::rrf`.
     Fusion,
 }
