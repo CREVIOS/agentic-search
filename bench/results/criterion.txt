@@ -1,0 +1,2 @@
+test rrf_3x1000_top10 ... bench:      688186 ns/iter (+/- 211880)
+

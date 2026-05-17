@@ -102,6 +102,60 @@ pub async fn read(
     }))
 }
 
+/// Output verbosity for span-returning endpoints. The wire shape is
+/// always JSON; `response_format` chooses *what* lives inside.
+///
+/// - `concise`  → minimal token surface: uri, line_range, kind,
+///   symbol (if any), one-line snippet capped at 160 chars. Designed
+///   for the lead-agent loop where the model only needs a citation.
+/// - `detailed` → full `Span` struct including rank_signals,
+///   source_stage, content_hash, etc. The default.
+/// - `jsonl`    → newline-delimited JSON objects packed into a single
+///   string so the agent can stream-parse them and chunk for tool
+///   budgets without re-running search.
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponseFormat {
+    Concise,
+    #[default]
+    Detailed,
+    Jsonl,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ConciseSpan {
+    pub uri: String,
+    pub line_range: [u32; 2],
+    pub kind: as_grep::SpanKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    pub snippet: String,
+}
+
+impl ConciseSpan {
+    fn from(s: &Span) -> Self {
+        let snippet = s
+            .snippet
+            .as_deref()
+            .map(|raw| {
+                raw.lines()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("")
+                    .chars()
+                    .take(160)
+                    .collect::<String>()
+            })
+            .unwrap_or_default();
+        Self {
+            uri: s.uri.clone(),
+            line_range: s.line_range,
+            kind: s.kind,
+            symbol: s.symbol.clone(),
+            snippet,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct GrepRequest {
     pub uri: String,
@@ -115,6 +169,8 @@ pub struct GrepRequest {
     /// Widen each hit to its enclosing function/class/method.
     #[serde(default)]
     pub ast: bool,
+    #[serde(default)]
+    pub response_format: ResponseFormat,
 }
 fn default_max_hits() -> usize {
     1000
@@ -123,15 +179,66 @@ fn default_concurrency() -> usize {
     32
 }
 
+/// Envelope for span-returning endpoints. Exactly one of `spans`,
+/// `concise`, or `jsonl` is populated based on the request's
+/// `response_format`.
 #[derive(Debug, Serialize)]
 pub struct GrepResponse {
-    pub spans: Vec<Span>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spans: Option<Vec<Span>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub concise: Option<Vec<ConciseSpan>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jsonl: Option<String>,
+    pub format: &'static str,
+}
+
+impl GrepResponse {
+    pub fn from_spans(spans: Vec<Span>, fmt: ResponseFormat) -> Self {
+        match fmt {
+            ResponseFormat::Detailed => Self {
+                spans: Some(spans),
+                concise: None,
+                jsonl: None,
+                format: "detailed",
+            },
+            ResponseFormat::Concise => Self {
+                concise: Some(spans.iter().map(ConciseSpan::from).collect()),
+                spans: None,
+                jsonl: None,
+                format: "concise",
+            },
+            ResponseFormat::Jsonl => {
+                let mut buf = String::new();
+                for s in &spans {
+                    if let Ok(line) = serde_json::to_string(s) {
+                        buf.push_str(&line);
+                        buf.push('\n');
+                    }
+                }
+                Self {
+                    jsonl: Some(buf),
+                    spans: None,
+                    concise: None,
+                    format: "jsonl",
+                }
+            }
+        }
+    }
 }
 
 pub async fn grep(
     State(state): State<Arc<AppState>>,
     Json(req): Json<GrepRequest>,
 ) -> Result<Json<GrepResponse>, AppError> {
+    let fmt = req.response_format;
+    let spans = run_grep(state, &req).await?;
+    Ok(Json(GrepResponse::from_spans(spans, fmt)))
+}
+
+/// Internal helper so other handlers can reuse the grep + AST stage
+/// without re-encoding into the public envelope.
+async fn run_grep(state: Arc<AppState>, req: &GrepRequest) -> Result<Vec<Span>, AppError> {
     let (fs, prefix) = state.open_fs(&req.uri)?;
     let opts = ParallelOpts {
         grep: GrepOpts {
@@ -145,12 +252,11 @@ pub async fn grep(
     };
     let pg = ParallelGrep::new(fs.clone());
     let spans = pg.scan_prefix(&prefix, &req.pattern, &opts).await?;
-    let spans = if req.ast {
-        widen_spans(&fs, &state.ast, spans).await?
+    if req.ast {
+        Ok(widen_spans(&fs, &state.ast, spans).await?)
     } else {
-        spans
-    };
-    Ok(Json(GrepResponse { spans }))
+        Ok(spans)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -161,6 +267,8 @@ pub struct FindRequest {
     pub max_hits: usize,
     #[serde(default = "default_concurrency")]
     pub concurrency: usize,
+    #[serde(default)]
+    pub response_format: ResponseFormat,
 }
 
 pub async fn find(
@@ -169,6 +277,7 @@ pub async fn find(
 ) -> Result<Json<GrepResponse>, AppError> {
     let pattern = format!(r"\b{}\b", regex_escape(&req.symbol));
     let symbol = req.symbol.clone();
+    let fmt = req.response_format;
     let grep_req = GrepRequest {
         uri: req.uri,
         pattern,
@@ -178,15 +287,15 @@ pub async fn find(
         max_hits: req.max_hits.saturating_mul(4),
         concurrency: req.concurrency,
         ast: true,
+        response_format: ResponseFormat::Detailed,
     };
-    let raw = grep(State(state), Json(grep_req)).await?;
+    let mut spans = run_grep(state, &grep_req).await?;
     // Only keep AST-widened spans whose tree-sitter name field matches the
     // exact requested symbol. This drops comment / string / call-site hits
     // that grep alone surfaces.
-    let mut spans = raw.0.spans;
     spans.retain(|s| s.symbol.as_deref() == Some(symbol.as_str()));
     spans.truncate(req.max_hits);
-    Ok(Json(GrepResponse { spans }))
+    Ok(Json(GrepResponse::from_spans(spans, fmt)))
 }
 
 /// `/search` is the planner-fronted endpoint. v1 implements it as grep+AST
@@ -198,6 +307,8 @@ pub struct SearchRequest {
     pub query: String,
     #[serde(default = "default_k")]
     pub k: usize,
+    #[serde(default)]
+    pub response_format: ResponseFormat,
 }
 fn default_k() -> usize {
     20
@@ -266,9 +377,10 @@ pub async fn delegate(
         max_hits: candidate_limit,
         concurrency: 32,
         ast: true,
+        response_format: ResponseFormat::Detailed,
     };
     let budget = std::time::Duration::from_millis(req.budget_ms);
-    let raw = match tokio::time::timeout(budget, grep(State(state), Json(grep_req))).await {
+    let raw_spans = match tokio::time::timeout(budget, run_grep(state, &grep_req)).await {
         Ok(r) => r?,
         Err(_) => {
             return Ok(Json(DelegateResponse {
@@ -278,7 +390,7 @@ pub async fn delegate(
             }));
         }
     };
-    let ranked = rank_search_spans(raw.0.spans, &req.query, &terms, k);
+    let ranked = rank_search_spans(raw_spans, &req.query, &terms, k);
     let total = ranked.len();
     let elapsed = started.elapsed().as_millis();
     let findings: Vec<DelegateFinding> = ranked
@@ -335,12 +447,13 @@ pub async fn search(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SearchRequest>,
 ) -> Result<Json<GrepResponse>, AppError> {
+    let fmt = req.response_format;
     if req.k == 0 {
-        return Ok(Json(GrepResponse { spans: Vec::new() }));
+        return Ok(Json(GrepResponse::from_spans(Vec::new(), fmt)));
     }
     let terms = query_terms(&req.query);
     if terms.is_empty() {
-        return Ok(Json(GrepResponse { spans: Vec::new() }));
+        return Ok(Json(GrepResponse::from_spans(Vec::new(), fmt)));
     }
     let pattern = terms
         .iter()
@@ -355,11 +468,11 @@ pub async fn search(
         max_hits: candidate_limit,
         concurrency: 32,
         ast: true,
+        response_format: ResponseFormat::Detailed,
     };
-    let raw = grep(State(state), Json(grep_req)).await?;
-    Ok(Json(GrepResponse {
-        spans: rank_search_spans(raw.0.spans, &req.query, &terms, req.k),
-    }))
+    let raw = run_grep(state, &grep_req).await?;
+    let ranked = rank_search_spans(raw, &req.query, &terms, req.k);
+    Ok(Json(GrepResponse::from_spans(ranked, fmt)))
 }
 
 async fn widen_spans(
@@ -587,13 +700,15 @@ mod tests {
                 uri,
                 query: "find TODO inside beta function".to_string(),
                 k: 5,
+                response_format: ResponseFormat::Detailed,
             }),
         )
         .await
         .unwrap();
 
-        assert_eq!(resp.0.spans[0].symbol.as_deref(), Some("beta"));
-        assert!(resp.0.spans[0].snippet.as_deref().unwrap().contains("TODO"));
+        let spans = resp.0.spans.expect("detailed format returns spans");
+        assert_eq!(spans[0].symbol.as_deref(), Some("beta"));
+        assert!(spans[0].snippet.as_deref().unwrap().contains("TODO"));
     }
 
     #[tokio::test]
@@ -615,13 +730,15 @@ mod tests {
                 symbol: "beta".to_string(),
                 max_hits: 10,
                 concurrency: 4,
+                response_format: ResponseFormat::Detailed,
             }),
         )
         .await
         .unwrap();
 
-        assert_eq!(resp.0.spans.len(), 1);
-        assert_eq!(resp.0.spans[0].symbol.as_deref(), Some("beta"));
-        assert_eq!(resp.0.spans[0].line_range, [1, 2]);
+        let spans = resp.0.spans.expect("detailed format returns spans");
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].symbol.as_deref(), Some("beta"));
+        assert_eq!(spans[0].line_range, [1, 2]);
     }
 }

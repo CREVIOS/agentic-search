@@ -167,11 +167,45 @@ fn span_schema() -> Value {
     })
 }
 
+fn concise_span_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["uri", "line_range", "kind", "snippet"],
+        "properties": {
+            "uri":        { "type": "string" },
+            "line_range": {
+                "type": "array",
+                "minItems": 2, "maxItems": 2,
+                "items": { "type": "integer", "minimum": 1 }
+            },
+            "kind":     { "type": "string",
+                          "enum": ["line", "block", "function", "method", "class", "module"] },
+            "symbol":   { "type": ["string", "null"] },
+            "snippet":  { "type": "string" }
+        }
+    })
+}
+
 fn spans_response_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["spans"],
-        "properties": { "spans": { "type": "array", "items": span_schema() } }
+        "required": ["format"],
+        "properties": {
+            "format":  { "type": "string", "enum": ["detailed", "concise", "jsonl"] },
+            "spans":   { "type": "array", "items": span_schema() },
+            "concise": { "type": "array", "items": concise_span_schema() },
+            "jsonl":   { "type": "string",
+                         "description": "Newline-delimited JSON spans; one Span per line. Populated when response_format=jsonl." }
+        }
+    })
+}
+
+fn response_format_prop() -> Value {
+    json!({
+        "type": "string",
+        "enum": ["detailed", "concise", "jsonl"],
+        "default": "detailed",
+        "description": "Output verbosity. `concise` for the lead-agent loop (uri + line_range + 1-line snippet, capped at 160 chars). `jsonl` for stream-parsing inside the tool call."
     })
 }
 
@@ -241,7 +275,8 @@ pub fn tools_manifest() -> Vec<Value> {
                     "case_insensitive": { "type": "boolean", "default": false },
                     "max_hits":         { "type": "integer", "default": 1000 },
                     "concurrency":      { "type": "integer", "default": 32 },
-                    "ast":              { "type": "boolean", "default": false }
+                    "ast":              { "type": "boolean", "default": false },
+                    "response_format":  response_format_prop()
                 }
             },
             "outputSchema": spans_response_schema()
@@ -253,10 +288,11 @@ pub fn tools_manifest() -> Vec<Value> {
                 "type": "object",
                 "required": ["uri", "symbol"],
                 "properties": {
-                    "uri":         { "type": "string" },
-                    "symbol":      { "type": "string" },
-                    "max_hits":    { "type": "integer", "default": 200 },
-                    "concurrency": { "type": "integer", "default": 32 }
+                    "uri":             { "type": "string" },
+                    "symbol":          { "type": "string" },
+                    "max_hits":        { "type": "integer", "default": 200 },
+                    "concurrency":     { "type": "integer", "default": 32 },
+                    "response_format": response_format_prop()
                 }
             },
             "outputSchema": spans_response_schema()
@@ -268,9 +304,10 @@ pub fn tools_manifest() -> Vec<Value> {
                 "type": "object",
                 "required": ["uri", "query"],
                 "properties": {
-                    "uri":   { "type": "string" },
-                    "query": { "type": "string" },
-                    "k":     { "type": "integer", "default": 20 }
+                    "uri":             { "type": "string" },
+                    "query":           { "type": "string" },
+                    "k":               { "type": "integer", "default": 20 },
+                    "response_format": response_format_prop()
                 }
             },
             "outputSchema": spans_response_schema()
