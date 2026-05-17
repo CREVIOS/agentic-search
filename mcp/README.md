@@ -11,9 +11,13 @@ gets the full agentic-search tool surface for free.
 agentic-search serve --mcp
 ```
 
-This is the shape every framework adapter in `sdks/python/` and
-`sdks/node/` targets. Stdio JSON-RPC 2.0, protocol version
-`2025-11-25`.
+Stdio JSON-RPC 2.0, protocol version `2025-11-25`.
+
+The `claude-agent-search` adapter under `sdks/python/` spawns this
+server directly via MCP stdio. The other SDK adapters (OpenAI Agents,
+DeepAgents, LangChain, CrewAI, Node, Go) are REST clients that hit
+`agentic-search serve` (HTTP) — different transport, identical tool
+surface.
 
 ## Tools exposed
 
