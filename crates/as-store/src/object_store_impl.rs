@@ -99,6 +99,10 @@ impl Store for ObjectStoreImpl {
             })
             .boxed()
     }
+
+    fn describe(&self) -> String {
+        self.bucket_or_root.clone()
+    }
 }
 
 /// Root tag (bucket or local root) the store was constructed with.

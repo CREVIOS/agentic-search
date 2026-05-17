@@ -41,6 +41,10 @@ impl Fs {
     }
 
     /// List keys under `prefix` matching a glob pattern (relative to prefix).
+    ///
+    /// The pattern is matched against the *relative* portion of each key,
+    /// so `glob("docs", "*.md")` matches `docs/a.md` (the relative tail is
+    /// `a.md`). Use `**/*.md` to match files at any depth.
     pub fn glob<'a>(
         &'a self,
         prefix: &'a str,
@@ -49,10 +53,16 @@ impl Fs {
         let glob = Glob::new(pattern)
             .map_err(|e| Error::Config(format!("bad glob: {e}")))?
             .compile_matcher();
+        let prefix_owned: String = prefix.trim_end_matches('/').to_string();
         Ok(self
             .list(prefix)
             .try_filter(move |m| {
-                let matches = glob.is_match(&m.key);
+                let tail = m
+                    .key
+                    .strip_prefix(&prefix_owned)
+                    .unwrap_or(&m.key)
+                    .trim_start_matches('/');
+                let matches = glob.is_match(tail);
                 async move { matches }
             })
             .boxed())
