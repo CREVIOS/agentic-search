@@ -812,8 +812,7 @@ fn rank_search_spans(mut spans: Vec<Span>, query: &str, terms: &[String], k: usi
     }
     spans.sort_by(|a, b| {
         b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
+            .total_cmp(&a.score)
             .then_with(|| {
                 let a_overlap = a
                     .rank_signals
