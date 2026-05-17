@@ -571,7 +571,12 @@ pub async fn search(
         }
     }
 
-    let mut joined: Vec<Vec<Span>> = Vec::with_capacity(probes.len());
+    // Fan out the probes in parallel — the previous loop awaited each
+    // probe before starting the next, so the "multi-probe" planner was
+    // effectively serial. JoinSet drops cancel everything on early
+    // return (e.g. a /delegate timeout dropping this future).
+    let mut probe_set: tokio::task::JoinSet<Result<Vec<Span>, AppError>> =
+        tokio::task::JoinSet::new();
     for pattern in &probes {
         let grep_req = GrepRequest {
             uri: req.uri.clone(),
@@ -582,9 +587,16 @@ pub async fn search(
             ast: true,
             response_format: ResponseFormat::Detailed,
         };
-        match run_grep(state.clone(), &grep_req).await {
-            Ok(spans) => joined.push(spans),
-            Err(_) => continue,
+        let state = state.clone();
+        probe_set.spawn(async move { run_grep(state, &grep_req).await });
+    }
+    let mut joined: Vec<Vec<Span>> = Vec::with_capacity(probes.len());
+    while let Some(joined_res) = probe_set.join_next().await {
+        match joined_res {
+            Ok(Ok(spans)) => joined.push(spans),
+            // Per-probe failure (e.g. odd regex) is silently dropped so
+            // one bad probe never poisons the whole call.
+            Ok(Err(_)) | Err(_) => continue,
         }
     }
 

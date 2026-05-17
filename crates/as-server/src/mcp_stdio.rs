@@ -406,15 +406,45 @@ async fn tools_call(state: Arc<AppState>, params: Value) -> anyhow::Result<Value
         }
         other => anyhow::bail!("unknown tool: {other}"),
     };
-    // MCP `tools/call` shape: content blocks. We return a single JSON
-    // content block so hosts can structurally parse it.
+    // MCP `tools/call` returns `content` blocks for legacy clients
+    // plus `structuredContent` for schema-aware clients. We used to
+    // pretty-print the whole structured value into a text block,
+    // which doubled the payload (and the prettyprint expanded it
+    // further). Mirror a short one-line summary instead; clients that
+    // want the full result already have `structuredContent`.
+    let summary = mcp_text_summary(&result_value);
     Ok(json!({
-        "content": [
-            { "type": "text", "text": serde_json::to_string_pretty(&result_value)? }
-        ],
+        "content": [ { "type": "text", "text": summary } ],
         "isError": false,
         "structuredContent": result_value
     }))
+}
+
+/// One-line summary suitable as the MCP text mirror. Keeps the
+/// response small even when `structuredContent` is large.
+fn mcp_text_summary(value: &Value) -> String {
+    // Common shapes we emit: `{ spans: [...] }`, `{ entries: [...] }`,
+    // `{ findings: [...], summary: "..." }`, `{ format: "concise", ... }`.
+    if let Some(s) = value.get("summary").and_then(Value::as_str) {
+        return s.to_string();
+    }
+    if let Some(arr) = value.get("spans").and_then(Value::as_array) {
+        return format!("{} span(s)", arr.len());
+    }
+    if let Some(arr) = value.get("concise").and_then(Value::as_array) {
+        return format!("{} span(s) [concise]", arr.len());
+    }
+    if let Some(arr) = value.get("entries").and_then(Value::as_array) {
+        return format!(
+            "{} entr{}",
+            arr.len(),
+            if arr.len() == 1 { "y" } else { "ies" }
+        );
+    }
+    if let Some(bytes) = value.get("bytes").and_then(Value::as_u64) {
+        return format!("{bytes} bytes");
+    }
+    "ok".to_string()
 }
 
 fn error_resp(id: Option<Value>, code: i32, msg: &str) -> RpcResponse {

@@ -23,6 +23,7 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
+use tracing;
 
 pub const MANIFEST_PATH: &str = ".agentic-search/manifest.jsonl.gz";
 
@@ -221,10 +222,17 @@ impl ManifestIter {
             if trimmed.is_empty() {
                 continue;
             }
-            return match serde_json::from_str::<ManifestEntry>(trimmed) {
-                Ok(entry) => Ok(Some(entry)),
-                Err(_) => Ok(None), // Tolerate a truncated trailing line.
-            };
+            match serde_json::from_str::<ManifestEntry>(trimmed) {
+                Ok(entry) => return Ok(Some(entry)),
+                Err(e) => {
+                    // Tolerate corruption: log the line, skip it, keep
+                    // walking. The previous behaviour stopped the
+                    // entire listing on the first bad middle line,
+                    // silently dropping the rest of the corpus.
+                    tracing::warn!(error = %e, "manifest: skipping bad line");
+                    continue;
+                }
+            }
         }
     }
 }
