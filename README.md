@@ -213,17 +213,31 @@ Numbers below are from a 782-file Rust corpus (`tokio-rs/tokio` v1.40),
 5 runs, macOS / M-series. Full methodology and additional tables in
 [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 
-### Server-shape (agent-loop, warm AST cache)
+### Server-shape (agent-loop, warm AST cache, pre-warm-discard harness)
 
-| endpoint                                | p50 ms | p95 ms | notes                                            |
-| --------------------------------------- | -----: | -----: | ------------------------------------------------ |
-| `POST /grep`                            |   16.4 |   22.1 | **faster than native `rg`** + JSON spans         |
-| `POST /grep` (`ast: true`, warm cache)  |   31.7 |  152.8 | 13× faster than CLI cold path; content-addressed |
+| endpoint                                | p50 ms | p95 ms | mean ms | notes                                              |
+| --------------------------------------- | -----: | -----: | ------: | -------------------------------------------------- |
+| `POST /grep`                            |   31.9 |   38.0 |    31.8 | ripgrep-as-library + content-addressed JSON spans  |
+| `POST /grep` (`ast: true`, warm cache)  |  118.4 |  124.5 |   104.5 | tree-sitter widening with parse-cache + drift check |
+| `rg` (subprocess)                       |   33.6 |  206.8 |    64.5 | native ripgrep baseline, raw line output           |
 
-Wins this round: mmap fast path for `file://`, content-addressed
-`SpanCache` so vendored files share one parse, NVMe LRU sweep keeps disk
-bounded, `JoinSet` cancels detached AST work on early return, probe-level
-RRF fusion in `/search`.
+Reading: against a persistent server (the agent-loop shape Claude Code,
+DeepAgents, Cursor etc. actually use) `/grep` lands at p50 31.9 ms,
+within ~5% of native `rg` while emitting JSON spans, parallel fan-out,
+JoinSet cancellation, and per-span content-hash provenance for drift
+detection. Tighter p95 than `rg`'s subprocess path (38 ms vs. 207 ms).
+
+The earlier "p50 16.4 ms" claim in pre-release notes was contaminated by
+counting a cold first run inside the timed loop. The harness now discards
+one warm-up run before measuring (codex P2 fix). These numbers are the
+honest steady-state.
+
+Wins compared to the cold-CLI path: mmap fast path for `file://`,
+content-addressed `SpanCache` so vendored files share one parse, NVMe LRU
+sweep keeps disk bounded, `JoinSet` cancels detached AST work on early
+return, probe-level RRF fusion in `/search`, and post-grep content-hash
+drift detection so AST widening never attaches metadata sourced from a
+file that mutated mid-request.
 
 ### CodeSearchNet (lexical-only, no embeddings)
 
