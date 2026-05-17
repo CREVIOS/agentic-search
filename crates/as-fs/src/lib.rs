@@ -53,8 +53,16 @@ impl Fs {
         &'a self,
         prefix: &'a str,
     ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
-        if let Some((_, entries)) = as_store::manifest::read_manifest(&*self.store, prefix).await? {
-            let stream = futures::stream::iter(entries.into_iter().map(|e| Ok(e.to_object_meta())));
+        // Stream the manifest entry-by-entry so we don't materialize a
+        // Vec<ManifestEntry> for million-doc prefixes.
+        if let Some((_, iter)) = as_store::manifest::stream_manifest(&*self.store, prefix).await? {
+            let stream = futures::stream::unfold(iter, |mut it| async move {
+                match it.next_entry() {
+                    Ok(Some(entry)) => Some((Ok(entry.to_object_meta()), it)),
+                    Ok(None) => None,
+                    Err(e) => Some((Err(e), it)),
+                }
+            });
             return Ok(stream.boxed());
         }
         Ok(self.store.list(prefix))

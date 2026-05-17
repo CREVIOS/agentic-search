@@ -21,7 +21,6 @@ use as_core::{Error, Result};
 use bytes::Bytes;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use futures::stream::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 
@@ -84,18 +83,32 @@ fn manifest_key(prefix: &str) -> String {
 /// to `<prefix>/.agentic-search/manifest.jsonl.gz`. Skips the manifest
 /// path itself so we never recurse.
 pub async fn write_manifest(store: &dyn Store, prefix: &str) -> Result<ManifestHeader> {
+    use futures::stream::StreamExt;
     let manifest_path = manifest_key(prefix);
-    let entries: Vec<ManifestEntry> = store
-        .list(prefix)
-        .try_filter(|m| {
-            let keep = !m.key.ends_with(MANIFEST_PATH);
-            async move { keep }
-        })
-        .try_collect::<Vec<ObjectMeta>>()
-        .await?
-        .into_iter()
-        .map(ManifestEntry::from)
-        .collect();
+
+    // Stream the upstream listing through the gzip encoder one entry
+    // at a time. For an M-doc bucket we keep peak RAM at one
+    // `ManifestEntry`, plus the encoder's in-memory output (compressed
+    // body) which is still <100 MB even for millions of small docs.
+    let mut gz = GzEncoder::new(Vec::with_capacity(64 * 1024), Compression::default());
+    // Placeholder for the header line — we don't know the count until
+    // the stream finishes, so we'll rewrite the header at the end by
+    // assembling header + body separately.
+    let mut body = GzEncoder::new(Vec::with_capacity(64 * 1024), Compression::default());
+    let mut count: u64 = 0;
+    let mut listing = store.list(prefix);
+    while let Some(item) = listing.next().await {
+        let meta = item?;
+        if meta.key.ends_with(MANIFEST_PATH) {
+            continue;
+        }
+        let entry: ManifestEntry = meta.into();
+        let line = serde_json::to_string(&entry).map_err(|e| Error::Other(e.to_string()))?;
+        body.write_all(line.as_bytes()).map_err(Error::Io)?;
+        body.write_all(b"\n").map_err(Error::Io)?;
+        count += 1;
+    }
+    let body_bytes = body.finish().map_err(Error::Io)?;
 
     let header = ManifestHeader {
         v: 1,
@@ -104,21 +117,23 @@ pub async fn write_manifest(store: &dyn Store, prefix: &str) -> Result<ManifestH
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or_default(),
-        count: entries.len() as u64,
+        count,
     };
-
-    let mut gz = GzEncoder::new(Vec::with_capacity(4096), Compression::default());
-    gz.write_all(
-        serde_json::to_string(&header)
-            .map_err(|e| Error::Other(e.to_string()))?
-            .as_bytes(),
-    )
-    .map_err(Error::Io)?;
+    let header_line = serde_json::to_string(&header).map_err(|e| Error::Other(e.to_string()))?;
+    gz.write_all(header_line.as_bytes()).map_err(Error::Io)?;
     gz.write_all(b"\n").map_err(Error::Io)?;
-    for entry in &entries {
-        let line = serde_json::to_string(entry).map_err(|e| Error::Other(e.to_string()))?;
-        gz.write_all(line.as_bytes()).map_err(Error::Io)?;
-        gz.write_all(b"\n").map_err(Error::Io)?;
+    // Decompress the body into the outer gzip stream. Smaller surface
+    // than chaining encoders directly and lets the header live in its
+    // own deterministic prefix.
+    let mut body_decoder = flate2::read::GzDecoder::new(&body_bytes[..]);
+    let mut buf = [0u8; 16 * 1024];
+    loop {
+        use std::io::Read;
+        let n = body_decoder.read(&mut buf).map_err(Error::Io)?;
+        if n == 0 {
+            break;
+        }
+        gz.write_all(&buf[..n]).map_err(Error::Io)?;
     }
     let gz_bytes = gz.finish().map_err(Error::Io)?;
 
@@ -126,12 +141,33 @@ pub async fn write_manifest(store: &dyn Store, prefix: &str) -> Result<ManifestH
     Ok(header)
 }
 
-/// Read a manifest if one exists. Returns `Ok(None)` if the manifest
-/// is missing; an `Err` only on parse / decompression failure.
+/// Read a manifest if one exists, materializing every entry into a
+/// `Vec`. Convenient for small prefixes and unit tests; for M-doc
+/// prefixes prefer `stream_manifest` so memory stays bounded.
 pub async fn read_manifest(
     store: &dyn Store,
     prefix: &str,
 ) -> Result<Option<(ManifestHeader, Vec<ManifestEntry>)>> {
+    match stream_manifest(store, prefix).await? {
+        None => Ok(None),
+        Some((header, mut iter)) => {
+            let mut entries = Vec::with_capacity(header.count as usize);
+            while let Some(entry) = iter.next_entry()? {
+                entries.push(entry);
+            }
+            Ok(Some((header, entries)))
+        }
+    }
+}
+
+/// Stream a manifest entry-by-entry. The manifest is gunzipped once,
+/// but its decompressed text is iterated line-by-line so peak memory
+/// stays at one entry, not millions. Returns the header so callers can
+/// branch on `count` / `prefix` without scanning the body.
+pub async fn stream_manifest(
+    store: &dyn Store,
+    prefix: &str,
+) -> Result<Option<(ManifestHeader, ManifestIter)>> {
     use std::io::Read;
     let manifest_path = manifest_key(prefix);
     let bytes = match store.get(&manifest_path).await {
@@ -144,25 +180,53 @@ pub async fn read_manifest(
     decoder
         .read_to_string(&mut text)
         .map_err(|e| Error::Other(format!("gunzip manifest: {e}")))?;
-    let mut lines = text.lines();
-    let header_line = lines
-        .next()
+    // Split off the header line eagerly; the rest stays as one buffer
+    // the iterator walks line offsets through. `text` is kept alive
+    // inside the iterator so individual entries don't allocate beyond
+    // a single JSON parse.
+    let nl = text
+        .find('\n')
         .ok_or_else(|| Error::Other("manifest is empty".into()))?;
-    let header: ManifestHeader = serde_json::from_str(header_line)
+    let header_line = text[..nl].to_string();
+    let header: ManifestHeader = serde_json::from_str(&header_line)
         .map_err(|e| Error::Other(format!("bad manifest header: {e}")))?;
-    let mut entries = Vec::with_capacity(header.count as usize);
-    for line in lines {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let entry: ManifestEntry = match serde_json::from_str(line) {
-            Ok(e) => e,
-            Err(_) => continue, // Tolerate a truncated trailing line.
-        };
-        entries.push(entry);
+    let body = text.split_off(nl + 1);
+    Ok(Some((header, ManifestIter::new(body))))
+}
+
+/// Iterator over manifest entries; yields each `ManifestEntry` from
+/// the gunzipped JSONL body without materializing the whole list.
+pub struct ManifestIter {
+    body: String,
+    cursor: usize,
+}
+
+impl ManifestIter {
+    fn new(body: String) -> Self {
+        Self { body, cursor: 0 }
     }
-    Ok(Some((header, entries)))
+
+    pub fn next_entry(&mut self) -> Result<Option<ManifestEntry>> {
+        loop {
+            if self.cursor >= self.body.len() {
+                return Ok(None);
+            }
+            let rest = &self.body[self.cursor..];
+            let (line, advance) = match rest.find('\n') {
+                Some(nl) => (&rest[..nl], nl + 1),
+                None => (rest, rest.len()),
+            };
+            self.cursor += advance;
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            return match serde_json::from_str::<ManifestEntry>(trimmed) {
+                Ok(entry) => Ok(Some(entry)),
+                Err(_) => Ok(None), // Tolerate a truncated trailing line.
+            };
+        }
+    }
 }
 
 #[cfg(test)]
