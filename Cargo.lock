@@ -160,7 +160,7 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 
 [[package]]
 name = "as-ast"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "as-core",
@@ -182,7 +182,7 @@ dependencies = [
 
 [[package]]
 name = "as-cache"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "as-core",
@@ -202,7 +202,7 @@ dependencies = [
 
 [[package]]
 name = "as-cli"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "as-ast",
@@ -227,7 +227,7 @@ dependencies = [
 
 [[package]]
 name = "as-core"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "bytes",
  "serde",
@@ -237,7 +237,7 @@ dependencies = [
 
 [[package]]
 name = "as-embed"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "as-core",
@@ -249,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "as-fs"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "as-core",
@@ -265,7 +265,7 @@ dependencies = [
 
 [[package]]
 name = "as-grep"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "as-core",
@@ -286,7 +286,7 @@ dependencies = [
 
 [[package]]
 name = "as-index"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "as-core",
@@ -298,7 +298,7 @@ dependencies = [
 
 [[package]]
 name = "as-plan"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "as-ast",
@@ -320,7 +320,7 @@ dependencies = [
 
 [[package]]
 name = "as-rerank"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "as-core",
@@ -333,7 +333,7 @@ dependencies = [
 
 [[package]]
 name = "as-server"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "as-ast",
@@ -370,7 +370,7 @@ dependencies = [
 
 [[package]]
 name = "as-store"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "as-core",
@@ -391,7 +391,7 @@ dependencies = [
 
 [[package]]
 name = "as-vec"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "as-core",
@@ -412,7 +412,7 @@ dependencies = [
 
 [[package]]
 name = "as-web"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "as-core",
@@ -559,7 +559,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bench"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "as-core",
  "as-grep",

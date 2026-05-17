@@ -1,0 +1,158 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write  # OIDC for trusted PyPI / npm publishers
+
+jobs:
+  build-cli:
+    name: Build CLI (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: agentic-search-x86_64-linux.tar.gz
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            archive: agentic-search-aarch64-linux.tar.gz
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            archive: agentic-search-x86_64-darwin.tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: agentic-search-aarch64-darwin.tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: agentic-search-x86_64-windows.zip
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Install cross-compile toolchain (linux aarch64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          mkdir -p .cargo
+          cat >> .cargo/config.toml <<EOF
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          EOF
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }} -p as-cli
+
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          tar -C target/${{ matrix.target }}/release -czf dist/${{ matrix.archive }} agentic-search
+          (cd dist && shasum -a 256 ${{ matrix.archive }} > ${{ matrix.archive }}.sha256)
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        run: |
+          mkdir dist
+          Compress-Archive -Path target/${{ matrix.target }}/release/agentic-search.exe -DestinationPath dist/${{ matrix.archive }}
+          (Get-FileHash dist/${{ matrix.archive }} -Algorithm SHA256).Hash | Out-File -FilePath dist/${{ matrix.archive }}.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: |
+            dist/${{ matrix.archive }}
+            dist/${{ matrix.archive }}.sha256
+
+  build-python:
+    name: Build Python SDKs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdists + wheels
+        run: |
+          python -m pip install --upgrade pip build
+          mkdir -p dist/python
+          for pkg in sdks/python/*/; do
+            python -m build --sdist --wheel "$pkg" --outdir dist/python
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-dists
+          path: dist/python/*
+
+  build-node:
+    name: Build Node SDK tarball
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - name: Build + pack
+        working-directory: sdks/node/agentic-search
+        run: |
+          pnpm install --frozen-lockfile=false
+          pnpm run build
+          npm pack
+      - uses: actions/upload-artifact@v4
+        with:
+          name: node-tarball
+          path: sdks/node/agentic-search/*.tgz
+
+  release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-cli, build-python, build-node]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' -o -name '*.whl' -o -name '*.tar.gz' -o -name '*.tgz' \) -exec cp -v {} release/ \;
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            echo "name=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          name: ${{ steps.tag.outputs.name }}
+          body_path: CHANGELOG.md
+          files: release/*
+          generate_release_notes: false
+          draft: false
+          prerelease: false

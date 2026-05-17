@@ -4,13 +4,37 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "langchain-agentic-search"
-version = "0.0.1"
-description = "LangChain Retriever + Tool for agentic-search"
+version = "0.1.0"
+description = "LangChain Retriever + Tool for agentic-search — S3-native grep/AST/vector search"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 authors = [{ name = "agentic-search contributors" }]
+keywords = ["langchain", "retriever", "search", "rag", "s3", "ripgrep", "tree-sitter"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
-    "agentic-search>=0.0.1",
+    "requests>=2.31",
     "langchain-core>=0.3",
 ]
+
+[project.urls]
+Homepage = "https://github.com/CREVIOS/agentic-search"
+Repository = "https://github.com/CREVIOS/agentic-search"
+Documentation = "https://github.com/CREVIOS/agentic-search#readme"
+Issues = "https://github.com/CREVIOS/agentic-search/issues"
+Changelog = "https://github.com/CREVIOS/agentic-search/blob/main/CHANGELOG.md"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["langchain_agentic_search*"]

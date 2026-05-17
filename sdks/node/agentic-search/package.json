@@ -1,18 +1,55 @@
 {
   "name": "@agentic-search/sdk",
-  "version": "0.0.1",
-  "description": "Node SDK for agentic-search (S3-native ls/glob/read/grep for AI agents)",
+  "version": "0.1.0",
+  "description": "Node/TypeScript SDK for agentic-search — S3-native grep/AST/vector search for AI agents.",
   "license": "Apache-2.0",
+  "author": "agentic-search contributors",
+  "homepage": "https://github.com/CREVIOS/agentic-search#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CREVIOS/agentic-search.git",
+    "directory": "sdks/node/agentic-search"
+  },
+  "bugs": {
+    "url": "https://github.com/CREVIOS/agentic-search/issues"
+  },
+  "keywords": [
+    "agentic",
+    "search",
+    "rag",
+    "s3",
+    "ripgrep",
+    "tree-sitter",
+    "mcp",
+    "claude",
+    "openai",
+    "langchain"
+  ],
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": ["dist/"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "prepublishOnly": "pnpm run build"
   },
-  "engines": { "node": ">=20", "pnpm": ">=10" },
+  "engines": {
+    "node": ">=20"
+  },
   "packageManager": "pnpm@10.30.3",
+  "publishConfig": {
+    "access": "public"
+  },
   "devDependencies": {
     "typescript": "^5.6.0"
   }
