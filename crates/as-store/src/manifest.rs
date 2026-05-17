@@ -178,9 +178,8 @@ pub async fn stream_manifest(
         Err(Error::Store(_)) | Err(Error::Io(_)) => return Ok(None),
         Err(other) => return Err(other),
     };
-    let mut reader = std::io::BufReader::new(flate2::read::GzDecoder::new(
-        std::io::Cursor::new(bytes),
-    ));
+    let mut reader =
+        std::io::BufReader::new(flate2::read::GzDecoder::new(std::io::Cursor::new(bytes)));
     let mut header_line = String::new();
     let read = reader
         .read_line(&mut header_line)

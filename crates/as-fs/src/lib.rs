@@ -214,13 +214,22 @@ mod tests {
         let dir = tempdir().unwrap();
         let uri = format!("file://{}", dir.path().display());
         let (store, _) = as_store::open(&uri).unwrap();
-        store.put("docs/x.md", Bytes::from_static(b"x")).await.unwrap();
+        store
+            .put("docs/x.md", Bytes::from_static(b"x"))
+            .await
+            .unwrap();
         let header = serde_json::json!({"v":1,"prefix":"docs","generated_at":0,"count":99});
         let body = serde_json::json!({"key":"docs/x.md","size":1});
         let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         writeln!(gz, "{header}").unwrap();
         writeln!(gz, "{body}").unwrap();
-        store.put("docs/.agentic-search/manifest.jsonl.gz", Bytes::from(gz.finish().unwrap())).await.unwrap();
+        store
+            .put(
+                "docs/.agentic-search/manifest.jsonl.gz",
+                Bytes::from(gz.finish().unwrap()),
+            )
+            .await
+            .unwrap();
         let fs = Fs::new(store);
         let mut stream = fs.list_with_manifest("docs").await.unwrap();
         let mut count = 0;
@@ -255,7 +264,13 @@ mod tests {
             let e = serde_json::json!({"key": k, "size": 1});
             writeln!(gz, "{e}").unwrap();
         }
-        store.put("docs/.agentic-search/manifest.jsonl.gz", Bytes::from(gz.finish().unwrap())).await.unwrap();
+        store
+            .put(
+                "docs/.agentic-search/manifest.jsonl.gz",
+                Bytes::from(gz.finish().unwrap()),
+            )
+            .await
+            .unwrap();
         let fs = Fs::new(store);
         let mut stream = fs.list_with_manifest("docs").await.unwrap();
         let mut keys: Vec<String> = Vec::new();
@@ -279,7 +294,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let uri = format!("file://{}", dir.path().display());
         let (store, _) = as_store::open(&uri).unwrap();
-        store.put("docs/real.md", Bytes::from_static(b"x")).await.unwrap();
+        store
+            .put("docs/real.md", Bytes::from_static(b"x"))
+            .await
+            .unwrap();
         // count = ~2 billion; allocating one ManifestEntry per slot
         // would be on the order of 100 GB.
         let header = serde_json::json!({
@@ -287,7 +305,13 @@ mod tests {
         });
         let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         writeln!(gz, "{header}").unwrap();
-        store.put("docs/.agentic-search/manifest.jsonl.gz", Bytes::from(gz.finish().unwrap())).await.unwrap();
+        store
+            .put(
+                "docs/.agentic-search/manifest.jsonl.gz",
+                Bytes::from(gz.finish().unwrap()),
+            )
+            .await
+            .unwrap();
         let fs = Fs::new(store);
         // If this test OOM'd, the capacity cap regressed. Just
         // completing the call within the default test timeout is the

@@ -592,7 +592,6 @@ async fn search_inner(
     terms: Vec<String>,
     fmt: ResponseFormat,
 ) -> Result<Json<GrepResponse>, AppError> {
-
     // Fan out *multiple* grep probes in parallel and fuse spans rather
     // than running a single OR-of-terms regex. The model picks one
     // shape from the query (one "find" intent) but a single English

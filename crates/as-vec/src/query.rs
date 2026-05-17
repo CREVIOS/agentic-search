@@ -95,9 +95,7 @@ impl VecIndex {
         // resident at ~4 GB worst case; larger workloads should tune
         // explicitly via a config rather than letting the manifest
         // dictate RAM bounds.
-        let cluster_cache_cap = manifest
-            .k
-            .clamp(DEFAULT_CLUSTER_CACHE, MAX_CLUSTER_CACHE);
+        let cluster_cache_cap = manifest.k.clamp(DEFAULT_CLUSTER_CACHE, MAX_CLUSTER_CACHE);
         Ok(Self {
             store,
             prefix,
@@ -228,7 +226,8 @@ struct HeapEntry {
 
 impl PartialEq for HeapEntry {
     fn eq(&self, other: &Self) -> bool {
-        self.score.total_cmp(&other.score) == std::cmp::Ordering::Equal && self.doc_id == other.doc_id
+        self.score.total_cmp(&other.score) == std::cmp::Ordering::Equal
+            && self.doc_id == other.doc_id
     }
 }
 impl Eq for HeapEntry {}

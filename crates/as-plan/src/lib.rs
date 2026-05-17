@@ -351,7 +351,10 @@ mod tests {
             let next = rrf(&lists, 60, 16);
             let first_uris: Vec<_> = first.iter().map(|s| s.uri.clone()).collect();
             let next_uris: Vec<_> = next.iter().map(|s| s.uri.clone()).collect();
-            assert_eq!(first_uris, next_uris, "rrf order must be stable across runs");
+            assert_eq!(
+                first_uris, next_uris,
+                "rrf order must be stable across runs"
+            );
         }
     }
 

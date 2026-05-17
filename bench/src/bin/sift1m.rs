@@ -51,18 +51,9 @@ fn main() -> Result<()> {
         .get("k-clusters")
         .map(|s| s.parse().unwrap())
         .unwrap_or(1024);
-    let iters: usize = args
-        .get("iters")
-        .map(|s| s.parse().unwrap())
-        .unwrap_or(15);
-    let top_k: usize = args
-        .get("k")
-        .map(|s| s.parse().unwrap())
-        .unwrap_or(10);
-    let probe: usize = args
-        .get("probe")
-        .map(|s| s.parse().unwrap())
-        .unwrap_or(32);
+    let iters: usize = args.get("iters").map(|s| s.parse().unwrap()).unwrap_or(15);
+    let top_k: usize = args.get("k").map(|s| s.parse().unwrap()).unwrap_or(10);
+    let probe: usize = args.get("probe").map(|s| s.parse().unwrap()).unwrap_or(32);
     let n_queries: usize = args
         .get("queries")
         .map(|s| s.parse().unwrap())
@@ -90,15 +81,16 @@ fn main() -> Result<()> {
     if rebuild || !index_dir.join("manifest.json").exists() {
         build_index(&data, &index_dir, k_clusters, iters)?;
     } else {
-        println!("[skip build] using existing index at {}", index_dir.display());
+        println!(
+            "[skip build] using existing index at {}",
+            index_dir.display()
+        );
     }
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(run_queries(
-        &data, &index_dir, top_k, probe, n_queries,
-    ))?;
+    runtime.block_on(run_queries(&data, &index_dir, top_k, probe, n_queries))?;
     Ok(())
 }
 
@@ -119,8 +111,8 @@ fn build_index(data: &Path, out: &Path, k_clusters: usize, iters: usize) -> Resu
     println!("  normalized base ({:.2}s)", t1.elapsed().as_secs_f64());
 
     let t2 = Instant::now();
-    let (centroids, assignments) = train(&vectors, k_clusters, iters)
-        .map_err(|e| anyhow!("kmeans: {e}"))?;
+    let (centroids, assignments) =
+        train(&vectors, k_clusters, iters).map_err(|e| anyhow!("kmeans: {e}"))?;
     println!("  trained kmeans ({:.1}s)", t2.elapsed().as_secs_f64());
 
     let t3 = Instant::now();
@@ -171,14 +163,14 @@ fn build_index(data: &Path, out: &Path, k_clusters: usize, iters: usize) -> Resu
         chunk_chars: 0,
         chunk_overlap: 0,
     };
-    std::fs::write(out.join("manifest.json"), serde_json::to_vec_pretty(&manifest)?)?;
+    std::fs::write(
+        out.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest)?,
+    )?;
     println!("  wrote index ({:.1}s)", t3.elapsed().as_secs_f64());
 
     let total_bytes: u64 = walk_dir_size(out)?;
-    println!(
-        "  index size on disk: {:.1} MB",
-        total_bytes as f64 / 1e6
-    );
+    println!("  index size on disk: {:.1} MB", total_bytes as f64 / 1e6);
 
     println!("== build complete in {:.1}s ==", t0.elapsed().as_secs_f64());
     Ok(())
@@ -224,10 +216,8 @@ async fn run_queries(
         latencies_us.push(t.elapsed().as_micros() as u64);
 
         // Recall@k vs ground truth top-k.
-        let gt_set: std::collections::HashSet<u32> =
-            gt[i].iter().take(top_k).copied().collect();
-        let hits_set: std::collections::HashSet<u32> =
-            hits.iter().map(|h| h.doc.id).collect();
+        let gt_set: std::collections::HashSet<u32> = gt[i].iter().take(top_k).copied().collect();
+        let hits_set: std::collections::HashSet<u32> = hits.iter().map(|h| h.doc.id).collect();
         let hit_count = gt_set.intersection(&hits_set).count();
         recall_sum += hit_count as f64 / top_k as f64;
     }
