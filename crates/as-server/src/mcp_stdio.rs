@@ -139,7 +139,43 @@ async fn handle(state: Arc<AppState>, req: RpcRequest) -> anyhow::Result<Value> 
     }
 }
 
-fn tools_manifest() -> Vec<Value> {
+fn span_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["uri", "byte_range", "line_range", "kind", "score"],
+        "properties": {
+            "uri":        { "type": "string" },
+            "byte_range": {
+                "type": "object",
+                "required": ["start", "end"],
+                "properties": {
+                    "start": { "type": "integer", "minimum": 0 },
+                    "end":   { "type": "integer", "minimum": 0 }
+                }
+            },
+            "line_range": {
+                "type": "array",
+                "minItems": 2, "maxItems": 2,
+                "items": { "type": "integer", "minimum": 1 }
+            },
+            "symbol":   { "type": ["string", "null"] },
+            "kind":     { "type": "string",
+                          "enum": ["line", "block", "function", "method", "class", "module"] },
+            "snippet":  { "type": ["string", "null"] },
+            "score":    { "type": "number" }
+        }
+    })
+}
+
+fn spans_response_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["spans"],
+        "properties": { "spans": { "type": "array", "items": span_schema() } }
+    })
+}
+
+pub fn tools_manifest() -> Vec<Value> {
     vec![
         json!({
             "name": "ls",
@@ -148,9 +184,26 @@ fn tools_manifest() -> Vec<Value> {
                 "type": "object",
                 "required": ["uri"],
                 "properties": {
-                    "uri": { "type": "string", "description": "e.g. s3://bucket/path/, file:///abs/path" },
-                    "glob": { "type": "string", "description": "Glob relative to the prefix (e.g. **/*.rs)" },
+                    "uri":   { "type": "string", "description": "e.g. s3://bucket/path/, file:///abs/path" },
+                    "glob":  { "type": "string", "description": "Glob relative to the prefix (e.g. **/*.rs)" },
                     "limit": { "type": "integer", "default": 1000 }
+                }
+            },
+            "outputSchema": {
+                "type": "object",
+                "required": ["entries"],
+                "properties": {
+                    "entries": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["key", "size"],
+                            "properties": {
+                                "key":  { "type": "string" },
+                                "size": { "type": "integer", "minimum": 0 }
+                            }
+                        }
+                    }
                 }
             }
         }),
@@ -161,9 +214,18 @@ fn tools_manifest() -> Vec<Value> {
                 "type": "object",
                 "required": ["uri"],
                 "properties": {
-                    "uri": { "type": "string" },
-                    "offset": { "type": "integer" },
-                    "length": { "type": "integer" }
+                    "uri":    { "type": "string" },
+                    "offset": { "type": "integer", "minimum": 0 },
+                    "length": { "type": "integer", "minimum": 0 }
+                }
+            },
+            "outputSchema": {
+                "type": "object",
+                "required": ["uri", "bytes"],
+                "properties": {
+                    "uri":   { "type": "string" },
+                    "bytes": { "type": "integer", "minimum": 0 },
+                    "text":  { "type": ["string", "null"] }
                 }
             }
         }),
@@ -174,53 +236,82 @@ fn tools_manifest() -> Vec<Value> {
                 "type": "object",
                 "required": ["uri", "pattern"],
                 "properties": {
-                    "uri": { "type": "string" },
-                    "pattern": { "type": "string" },
+                    "uri":              { "type": "string" },
+                    "pattern":          { "type": "string" },
                     "case_insensitive": { "type": "boolean", "default": false },
-                    "max_hits": { "type": "integer", "default": 1000 },
-                    "concurrency": { "type": "integer", "default": 32 },
-                    "ast": { "type": "boolean", "default": false }
+                    "max_hits":         { "type": "integer", "default": 1000 },
+                    "concurrency":      { "type": "integer", "default": 32 },
+                    "ast":              { "type": "boolean", "default": false }
                 }
-            }
+            },
+            "outputSchema": spans_response_schema()
         }),
         json!({
             "name": "find_symbol",
-            "description": "Locate a function/class/method by exact name across a prefix. Always AST-widened.",
+            "description": "Locate a function/class/method by exact name across a prefix. Tree-sitter widens each grep hit and the planner drops spans whose AST symbol name does not match.",
             "inputSchema": {
                 "type": "object",
                 "required": ["uri", "symbol"],
                 "properties": {
-                    "uri": { "type": "string" },
-                    "symbol": { "type": "string" },
-                    "max_hits": { "type": "integer", "default": 200 },
+                    "uri":         { "type": "string" },
+                    "symbol":      { "type": "string" },
+                    "max_hits":    { "type": "integer", "default": 200 },
                     "concurrency": { "type": "integer", "default": 32 }
                 }
-            }
+            },
+            "outputSchema": spans_response_schema()
         }),
         json!({
             "name": "search",
-            "description": "Hybrid search over a prefix. Currently grep+AST; future versions may also fan out to optional vector / web stages.",
+            "description": "Hybrid search over a prefix. Runs the planner (parallel grep + AST widening; vector stage if an index exists at .agentic-search/index/<namespace>/).",
             "inputSchema": {
                 "type": "object",
                 "required": ["uri", "query"],
                 "properties": {
-                    "uri": { "type": "string" },
+                    "uri":   { "type": "string" },
                     "query": { "type": "string" },
-                    "k": { "type": "integer", "default": 20 }
+                    "k":     { "type": "integer", "default": 20 }
                 }
-            }
+            },
+            "outputSchema": spans_response_schema()
         }),
         json!({
             "name": "delegate",
-            "description": "Run a search-only subagent loop with a wall-time budget. Returns a one-paragraph summary plus compressed citations to spans. Use this when a lead agent wants ONE call that answers a 'find / explain / locate' question without consuming its own context.",
+            "description": "Run a search-only subagent loop with a wall-time budget. Returns a one-paragraph summary plus compressed citations to spans. Use when a lead agent wants ONE call that answers a 'find / explain / locate' question without spending its own context on a loop.",
             "inputSchema": {
                 "type": "object",
                 "required": ["uri", "query"],
                 "properties": {
-                    "uri": { "type": "string" },
-                    "query": { "type": "string" },
-                    "k": { "type": "integer", "default": 20 },
+                    "uri":       { "type": "string" },
+                    "query":     { "type": "string" },
+                    "k":         { "type": "integer", "default": 20 },
                     "budget_ms": { "type": "integer", "default": 5000 }
+                }
+            },
+            "outputSchema": {
+                "type": "object",
+                "required": ["summary", "findings", "stats"],
+                "properties": {
+                    "summary":  { "type": "string" },
+                    "findings": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["uri", "line_range", "byte_range", "kind", "snippet"],
+                            "properties": {
+                                "uri":        { "type": "string" },
+                                "line_range": { "type": "array", "minItems": 2, "maxItems": 2,
+                                                "items": { "type": "integer", "minimum": 1 } },
+                                "byte_range": { "type": "array", "minItems": 2, "maxItems": 2,
+                                                "items": { "type": "integer", "minimum": 0 } },
+                                "symbol":     { "type": ["string", "null"] },
+                                "kind":       { "type": "string",
+                                                "enum": ["line", "block", "function", "method", "class", "module"] },
+                                "snippet":    { "type": "string" }
+                            }
+                        }
+                    },
+                    "stats": { "type": "object" }
                 }
             }
         }),

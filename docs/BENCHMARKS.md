@@ -3,6 +3,22 @@
 The numbers in [`PLAN.md`](PLAN.md) are the targets. This document is how we
 measure them.
 
+## Scope decisions (answers to the v3 open questions)
+
+1. **Default public claim covers both workloads, in two separate tables.**
+   Code repositories use the grep + tree-sitter path; million-document
+   S3 corpora use the centroid vector path. Mixing them into a single
+   number always misleads someone, so we don't.
+2. **Launch-blocker agent harnesses (every one we ship adapters for):**
+   Claude Agent SDK, OpenAI Agents SDK, LangChain, CrewAI, DeepAgents,
+   and any MCP host (Claude Code, Cursor, Cline, …). Each adapter
+   ships with at least one end-to-end test in `integration_tests/`.
+3. **First published claims use RustFS / MinIO on a developer machine**
+   so anyone can reproduce them with `docker compose -f
+   docker-compose.rustfs.yml up -d`. AWS S3 numbers are reported in a
+   separate table when CI runs against a real bucket; they will never
+   replace the RustFS numbers, only annotate them.
+
 ## What we benchmark
 
 | Dimension                    | Metric                                              | Target  |
