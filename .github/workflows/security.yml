@@ -65,9 +65,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      # `version` input intentionally omitted — `package.json` declares
+      # `packageManager` which the action reads. Setting both trips
+      # ERR_PNPM_BAD_PM_VERSION.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - run: pnpm install --frozen-lockfile=false
       - name: Audit
         # pnpm audit returns non-zero on advisories of any severity.
@@ -85,7 +86,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          # Bumped from 1.22 to 1.25 to clear the stdlib CVE chain
+          # govulncheck flagged on net / crypto/tls / crypto/x509 /
+          # net/http (all fixed in Go 1.25.x).
+          go-version: "1.25"
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
       - name: Run govulncheck
