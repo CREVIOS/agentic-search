@@ -7,9 +7,7 @@ use as_core::{Error, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use object_store::{
-    aws::AmazonS3Builder, gcp::GoogleCloudStorageBuilder, local::LocalFileSystem, ObjectStore,
-};
+use object_store::{aws::AmazonS3Builder, gcp::GoogleCloudStorageBuilder, ObjectStore};
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -42,7 +40,9 @@ pub trait Store: Send + Sync {
 
 pub type ArcStore = Arc<dyn Store>;
 
+pub mod local_mmap;
 pub mod object_store_impl;
+pub use local_mmap::LocalMmapStore;
 pub use object_store_impl::ObjectStoreImpl;
 
 /// Parsed URI: `(scheme, authority, key_prefix)`.
@@ -104,17 +104,10 @@ pub fn open(uri: &str) -> Result<(ArcStore, String)> {
                     .map_err(Error::Io)?
                     .join(&parsed.key)
             };
-            std::fs::create_dir_all(&root).map_err(Error::Io)?;
-            let inner =
-                LocalFileSystem::new_with_prefix(&root).map_err(|e| Error::Store(e.to_string()))?;
-            let desc = format!("file://{}", root.display());
-            Ok((
-                Arc::new(ObjectStoreImpl::new(
-                    Arc::new(inner) as Arc<dyn ObjectStore>,
-                    desc,
-                )),
-                String::new(),
-            ))
+            // Local files take the mmap fast path: avoids tokio FS
+            // buffering for grep-style workloads.
+            let store = LocalMmapStore::new(&root)?;
+            Ok((Arc::new(store), String::new()))
         }
         "s3" | "r2" => {
             let bucket = parsed

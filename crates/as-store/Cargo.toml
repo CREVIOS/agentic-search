@@ -18,6 +18,8 @@ futures = { workspace = true }
 tracing = { workspace = true }
 object_store = { workspace = true }
 serde = { workspace = true }
+memmap2 = "0.9"
+walkdir = "2"
 
 [dev-dependencies]
 tempfile = "3"
