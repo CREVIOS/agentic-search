@@ -15,28 +15,6 @@ members = [
     "crates/as-plan",
     "crates/as-server",
     "crates/as-cli",
-    "crates/as-bindings-py",
-    "crates/as-bindings-node",
-    "bench",
-]
-
-# Bindings crates require a Python/Node host to link against; exclude them
-# from the default workspace build/test set so a plain `cargo test` works.
-default-members = [
-    "crates/as-core",
-    "crates/as-store",
-    "crates/as-fs",
-    "crates/as-grep",
-    "crates/as-ast",
-    "crates/as-cache",
-    "crates/as-embed",
-    "crates/as-index",
-    "crates/as-vec",
-    "crates/as-web",
-    "crates/as-rerank",
-    "crates/as-plan",
-    "crates/as-server",
-    "crates/as-cli",
     "bench",
 ]
 

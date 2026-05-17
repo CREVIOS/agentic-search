@@ -9,7 +9,9 @@
 //!   - `tools/call`        → dispatch to the same handlers used by REST
 //!   - `ping`              → liveness probe
 
-use crate::handlers::{self, FindRequest, GrepRequest, LsRequest, ReadRequest, SearchRequest};
+use crate::handlers::{
+    self, DelegateRequest, FindRequest, GrepRequest, LsRequest, ReadRequest, SearchRequest,
+};
 use crate::AppState;
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
@@ -208,6 +210,20 @@ fn tools_manifest() -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "name": "delegate",
+            "description": "Run a search-only subagent loop with a wall-time budget. Returns a one-paragraph summary plus compressed citations to spans. Use this when a lead agent wants ONE call that answers a 'find / explain / locate' question without consuming its own context.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["uri", "query"],
+                "properties": {
+                    "uri": { "type": "string" },
+                    "query": { "type": "string" },
+                    "k": { "type": "integer", "default": 20 },
+                    "budget_ms": { "type": "integer", "default": 5000 }
+                }
+            }
+        }),
     ]
 }
 
@@ -249,6 +265,13 @@ async fn tools_call(state: Arc<AppState>, params: Value) -> anyhow::Result<Value
         "search" => {
             let req: SearchRequest = serde_json::from_value(args)?;
             let resp = handlers::search(State(state), axum::Json(req))
+                .await
+                .map_err(|e| anyhow::anyhow!("{:?}", e))?;
+            serde_json::to_value(resp.0)?
+        }
+        "delegate" => {
+            let req: DelegateRequest = serde_json::from_value(args)?;
+            let resp = handlers::delegate(State(state), axum::Json(req))
                 .await
                 .map_err(|e| anyhow::anyhow!("{:?}", e))?;
             serde_json::to_value(resp.0)?

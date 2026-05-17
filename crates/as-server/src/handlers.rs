@@ -203,6 +203,134 @@ fn default_k() -> usize {
     20
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DelegateRequest {
+    pub uri: String,
+    pub query: String,
+    #[serde(default = "default_k")]
+    pub k: usize,
+    /// Max wall-time budget the subagent loop may spend. Default 5s.
+    #[serde(default = "default_delegate_budget_ms")]
+    pub budget_ms: u64,
+}
+fn default_delegate_budget_ms() -> u64 {
+    5000
+}
+
+#[derive(Debug, Serialize)]
+pub struct DelegateFinding {
+    pub uri: String,
+    pub line_range: [u32; 2],
+    pub byte_range: [u64; 2],
+    pub symbol: Option<String>,
+    pub kind: as_grep::SpanKind,
+    pub snippet: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DelegateResponse {
+    pub summary: String,
+    pub findings: Vec<DelegateFinding>,
+    pub stats: serde_json::Value,
+}
+
+/// /delegate — search-only subagent loop. Runs the same planner as
+/// /search but with a larger candidate budget, then compresses results
+/// into a token-frugal answer with citations. Designed to be called by
+/// a lead agent that wants a single tool that answers "find X" cheaply.
+pub async fn delegate(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<DelegateRequest>,
+) -> Result<Json<DelegateResponse>, AppError> {
+    let started = std::time::Instant::now();
+    let k = req.k.clamp(1, 50);
+    let candidate_limit = k.saturating_mul(20).clamp(64, 2000);
+    let terms = query_terms(&req.query);
+    let stats_terms: Vec<String> = terms.to_vec();
+    if terms.is_empty() {
+        return Ok(Json(DelegateResponse {
+            summary: "query has no useful terms; nothing to delegate".into(),
+            findings: vec![],
+            stats: serde_json::json!({"terms": stats_terms, "elapsed_ms": started.elapsed().as_millis()}),
+        }));
+    }
+    let pattern = terms
+        .iter()
+        .map(|t| regex_escape(t))
+        .collect::<Vec<_>>()
+        .join("|");
+    let grep_req = GrepRequest {
+        uri: req.uri,
+        pattern,
+        case_insensitive: true,
+        max_hits: candidate_limit,
+        concurrency: 32,
+        ast: true,
+    };
+    let budget = std::time::Duration::from_millis(req.budget_ms);
+    let raw = match tokio::time::timeout(budget, grep(State(state), Json(grep_req))).await {
+        Ok(r) => r?,
+        Err(_) => {
+            return Ok(Json(DelegateResponse {
+                summary: format!("budget {}ms exceeded before any results", req.budget_ms),
+                findings: vec![],
+                stats: serde_json::json!({"terms": stats_terms, "timeout": true}),
+            }));
+        }
+    };
+    let ranked = rank_search_spans(raw.0.spans, &req.query, &terms, k);
+    let total = ranked.len();
+    let elapsed = started.elapsed().as_millis();
+    let findings: Vec<DelegateFinding> = ranked
+        .into_iter()
+        .map(|s| DelegateFinding {
+            line_range: s.line_range,
+            byte_range: [s.byte_range.start, s.byte_range.end],
+            symbol: s.symbol,
+            kind: s.kind,
+            snippet: s
+                .snippet
+                .as_deref()
+                .map(|t| {
+                    // Compress: first non-empty line, capped at 240 chars.
+                    let line = t.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+                    line.chars().take(240).collect::<String>()
+                })
+                .unwrap_or_default(),
+            uri: s.uri,
+        })
+        .collect();
+    let summary = if findings.is_empty() {
+        format!("no matches for {:?}", req.query)
+    } else {
+        let by_uri: std::collections::BTreeMap<&str, usize> =
+            findings
+                .iter()
+                .fold(std::collections::BTreeMap::new(), |mut acc, f| {
+                    *acc.entry(f.uri.as_str()).or_insert(0) += 1;
+                    acc
+                });
+        let breakdown: Vec<String> = by_uri
+            .iter()
+            .map(|(uri, n)| format!("{n} in {uri}"))
+            .collect();
+        format!(
+            "{total} match(es) for {:?}: {}",
+            req.query,
+            breakdown.join(", ")
+        )
+    };
+    Ok(Json(DelegateResponse {
+        summary,
+        findings,
+        stats: serde_json::json!({
+            "terms": stats_terms,
+            "elapsed_ms": elapsed,
+            "budget_ms": req.budget_ms,
+        }),
+    }))
+}
+
 pub async fn search(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SearchRequest>,

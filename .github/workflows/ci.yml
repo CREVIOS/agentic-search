@@ -29,9 +29,7 @@ jobs:
       - name: fmt
         run: cargo fmt --all -- --check
       - name: clippy
-        # Bindings crates need a host runtime (Python/Node) to link, so exclude
-        # them from default CI; they are released by separate workflows.
-        run: cargo clippy --all-targets --exclude as-bindings-py --exclude as-bindings-node --workspace -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: build
         run: cargo build --all-targets
       - name: test

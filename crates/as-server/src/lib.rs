@@ -24,6 +24,7 @@ pub fn router_with_state(state: Arc<AppState>) -> Router {
         .route("/grep", post(handlers::grep))
         .route("/find", post(handlers::find))
         .route("/search", post(handlers::search))
+        .route("/delegate", post(handlers::delegate))
         .with_state(state)
 }
 

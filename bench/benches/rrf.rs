@@ -1,19 +1,21 @@
-use as_core::Hit;
+use as_grep::{Span, SpanKind};
 use as_plan::rrf;
 use criterion::{criterion_group, criterion_main, Criterion};
 
-fn synthetic_lists(n_lists: usize, list_len: usize) -> Vec<Vec<Hit>> {
+fn synthetic_lists(n_lists: usize, list_len: usize) -> Vec<Vec<Span>> {
     (0..n_lists)
         .map(|li| {
             (0..list_len)
                 .map(|i| {
-                    let id = format!("doc_{}", (i + li * 7) % (list_len * 2));
-                    Hit {
-                        id: id.clone(),
-                        uri: id,
-                        score: 0.0,
+                    let uri = format!("doc_{}", (i + li * 7) % (list_len * 2));
+                    Span {
+                        uri,
+                        byte_range: 0..1,
+                        line_range: [1, 1],
+                        symbol: None,
+                        kind: SpanKind::Line,
                         snippet: None,
-                        metadata: serde_json::Value::Null,
+                        score: 0.0,
                     }
                 })
                 .collect()
