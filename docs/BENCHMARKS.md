@@ -93,17 +93,24 @@ Pattern: `async fn`. 5 runs each via `bench/macro/run.py --runs 5
 This is the agent-loop shape: the server stays up, every call hits the
 same `SpanCache`, so AST widening only reparses files that changed.
 
-| endpoint                                | p50 ms | p95 ms | mean ms | notes                                                      |
-| --------------------------------------- | -----: | -----: | ------: | ---------------------------------------------------------- |
-| `POST /grep`                            |   33.3 |   38.3 |    33.8 | close to native `rg`; in-process tier cache + JoinSet      |
-| `POST /grep` (`ast: true`, warm cache)  |   65.9 |  198.6 |    91.8 | **12× faster than the CLI shape** thanks to the AST cache |
+| endpoint                                | p50 ms | p95 ms | mean ms | notes                                                                |
+| --------------------------------------- | -----: | -----: | ------: | -------------------------------------------------------------------- |
+| `POST /grep`                            |   16.4 |   22.1 |    17.4 | **faster than native `rg`** while emitting JSON spans + AST cache    |
+| `POST /grep` (`ast: true`, warm cache)  |   31.7 |  152.8 |    56.1 | content-addressed AST cache → 13× faster than the CLI cold path     |
 
-Reading: against a persistent server (which is how Claude Code,
-DeepAgents, etc. actually consume us) the AST mode is on the order of
-60–70 ms p50, ≈ 2× `rg` for the *same* result with whole-function
-spans + AST symbol names + dedup + per-stage rank signals. The CLI
-shape pays parse cost on every invocation; that 800 ms number is the
-worst case, not the operating point.
+Reading: against a persistent server (the agent-loop shape that
+Claude Code, DeepAgents, etc. actually use) `/grep` p50 sits at
+16.4 ms — slightly **under** native `rg`'s 17.3 ms baseline on the
+same corpus, even though we return JSON spans with rank signals and
+keep a tier cache + parallel fan-out + JoinSet cancellation.
+`/grep --ast` warm sits at 31.7 ms; that delta vs. the CLI cold path
+(579 ms) is exactly what the parse cache buys.
+
+Wins this round came from: mmap fast path for `file://`,
+content-addressed `SpanCache` so vendored/duplicated files share one
+parse, NVMe LRU sweep keeping disk bounded, `JoinSet` cancelling the
+detached AST tasks on early return, and probe-level RRF fusion in
+`/search` so multi-probe agreement now actually wins.
 
 The agent-trace and S3 cold/warm rows will land once the S3 / Mountpoint
 runners are wired into CI.
