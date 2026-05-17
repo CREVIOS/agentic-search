@@ -1,6 +1,6 @@
 [build-system]
-requires = ["maturin>=1.7,<2"]
-build-backend = "maturin"
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "claude-agent-search"
@@ -11,10 +11,9 @@ requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 authors = [{ name = "agentic-search contributors" }]
 dependencies = [
-    "agentic-search>=0.0.1",
-    "claude-agent-sdk>=0.1.0",
+    # Pure-python adapter: spawns the agentic-search binary over MCP stdio.
+    "claude-agent-sdk>=0.1.81",
 ]
 
-[tool.maturin]
-python-source = "src"
-module-name = "claude_agent_search._native"
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -4,7 +4,10 @@ members = [
     "crates/as-core",
     "crates/as-store",
     "crates/as-fs",
-    "crates/as-lex",
+    "crates/as-grep",
+    "crates/as-ast",
+    "crates/as-cache",
+    "crates/as-index",
     "crates/as-vec",
     "crates/as-web",
     "crates/as-rerank",
@@ -22,7 +25,10 @@ default-members = [
     "crates/as-core",
     "crates/as-store",
     "crates/as-fs",
-    "crates/as-lex",
+    "crates/as-grep",
+    "crates/as-ast",
+    "crates/as-cache",
+    "crates/as-index",
     "crates/as-vec",
     "crates/as-web",
     "crates/as-rerank",
@@ -57,7 +63,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Storage
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-sdk-s3 = "1"
-object_store = { version = "0.11", features = ["aws", "gcp"] }
+object_store = { version = "0.13", features = ["aws", "gcp"] }
 
 # Lexical
 grep-searcher = "0.1"
@@ -87,7 +93,10 @@ criterion = { version = "0.5", features = ["html_reports"] }
 as-core = { path = "crates/as-core" }
 as-store = { path = "crates/as-store" }
 as-fs = { path = "crates/as-fs" }
-as-lex = { path = "crates/as-lex" }
+as-grep = { path = "crates/as-grep" }
+as-ast = { path = "crates/as-ast" }
+as-cache = { path = "crates/as-cache" }
+as-index = { path = "crates/as-index" }
 as-vec = { path = "crates/as-vec" }
 as-web = { path = "crates/as-web" }
 as-rerank = { path = "crates/as-rerank" }

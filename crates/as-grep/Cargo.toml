@@ -1,34 +1,29 @@
 [package]
-name = "as-server"
+name = "as-grep"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "HTTP + MCP server exposing agentic-search to any agent runtime"
+description = "Ripgrep-as-library scanning + parallel prefix scan for agentic-search"
 
 [dependencies]
 as-core = { workspace = true }
 as-store = { workspace = true }
 as-fs = { workspace = true }
-as-grep = { workspace = true }
-as-ast = { workspace = true }
-as-cache = { workspace = true }
-as-plan = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
-futures = { workspace = true }
 tokio = { workspace = true }
+futures = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-axum = { workspace = true }
-tower = { workspace = true }
-tower-http = { workspace = true }
+grep-searcher = { workspace = true }
+grep-regex = { workspace = true }
+grep-matcher = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-parking_lot = "0.12"
 
 [dev-dependencies]
 tempfile = "3"
-reqwest = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+bytes = { workspace = true }

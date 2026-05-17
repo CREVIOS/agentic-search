@@ -1,5 +1,9 @@
-//! Tantivy BM25 index. Local-disk segments for v0; S3-backed segments planned
-//! once we ship a custom `Directory` impl backed by `as-store`.
+//! Optional BM25 (tantivy) index for unstructured corpora.
+//!
+//! This crate is NOT on the default agentic hot path. The 2026 consensus
+//! is that grep + AST spans dominates retrieval for code-shaped agent
+//! workloads; tantivy is here for the non-code cases (PDF prose, support
+//! tickets, scraped HTML, …) where lexical recall genuinely helps.
 
 use as_core::{Doc, Error, Hit, Result};
 use std::path::Path;

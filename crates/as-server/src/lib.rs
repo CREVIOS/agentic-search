@@ -1,25 +1,34 @@
-//! HTTP API + MCP server. v0 exposes a stub `/search` endpoint; M5 wires the
-//! full planner and an MCP stdio bridge.
+//! HTTP + MCP server. Exposes the agentic-search tool surface to any
+//! agent runtime: REST for direct calls, MCP stdio for Claude Code /
+//! Claude Agent SDK / MCP-aware clients.
 
-use axum::{routing::post, Json, Router};
-use serde::{Deserialize, Serialize};
+pub mod handlers;
+pub mod mcp_stdio;
+pub mod state;
 
-#[derive(Debug, Deserialize)]
-pub struct SearchRequest {
-    pub query: String,
-    #[serde(default)]
-    pub k: Option<usize>,
+use axum::{
+    routing::{get, post},
+    Router,
+};
+use std::sync::Arc;
+
+pub use state::AppState;
+
+/// Build an axum router. The state is shared across requests so cache /
+/// open stores survive across calls.
+pub fn router_with_state(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/health", get(handlers::health))
+        .route("/ls", post(handlers::ls))
+        .route("/read", post(handlers::read))
+        .route("/grep", post(handlers::grep))
+        .route("/find", post(handlers::find))
+        .route("/search", post(handlers::search))
+        .with_state(state)
 }
 
-#[derive(Debug, Serialize)]
-pub struct SearchResponse {
-    pub hits: Vec<as_core::Hit>,
-}
-
+/// Convenience for `agentic-search serve --bind …` — builds a router with
+/// a default `AppState`.
 pub fn router() -> Router {
-    Router::new().route("/search", post(search))
-}
-
-async fn search(Json(_req): Json<SearchRequest>) -> Json<SearchResponse> {
-    Json(SearchResponse { hits: vec![] })
+    router_with_state(Arc::new(AppState::default()))
 }

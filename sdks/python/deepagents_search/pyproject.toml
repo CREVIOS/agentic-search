@@ -11,6 +11,6 @@ requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 authors = [{ name = "agentic-search contributors" }]
 dependencies = [
-    "agentic-search>=0.0.1",
-    "deepagents>=0.0.1",
+    "requests>=2.31",
+    "deepagents>=0.6.1",
 ]

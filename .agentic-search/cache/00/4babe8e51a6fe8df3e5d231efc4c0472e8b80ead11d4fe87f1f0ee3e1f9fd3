@@ -1,0 +1,6 @@
+fn one() -> i32 { 1 }
+
+fn two() -> i32 {
+    // TODO: rewrite two
+    2
+}

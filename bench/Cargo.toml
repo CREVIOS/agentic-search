@@ -15,7 +15,7 @@ harness = false
 [dependencies]
 as-core = { workspace = true }
 as-plan = { workspace = true }
-as-lex = { workspace = true }
+as-grep = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
