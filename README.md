@@ -217,15 +217,16 @@ Numbers below are from a 782-file Rust corpus (`tokio-rs/tokio` v1.40),
 
 | endpoint                                | p50 ms | p95 ms | mean ms | notes                                              |
 | --------------------------------------- | -----: | -----: | ------: | -------------------------------------------------- |
-| `POST /grep`                            |   31.9 |   38.0 |    31.8 | ripgrep-as-library + content-addressed JSON spans  |
-| `POST /grep` (`ast: true`, warm cache)  |  118.4 |  124.5 |   104.5 | tree-sitter widening with parse-cache + drift check |
-| `rg` (subprocess)                       |   33.6 |  206.8 |    64.5 | native ripgrep baseline, raw line output           |
+| `POST /grep`                            |   31.1 |   47.2 |    33.4 | ripgrep-as-library + JSON spans                    |
+| `POST /grep` (`ast: true`, warm cache)  |   88.3 |  146.1 |   102.7 | tree-sitter widening + parse-cache + drift check    |
+| `rg` (subprocess)                       |   32.4 |   53.2 |    35.8 | native ripgrep baseline, raw line output           |
 
 Reading: against a persistent server (the agent-loop shape Claude Code,
-DeepAgents, Cursor etc. actually use) `/grep` lands at p50 31.9 ms,
-within ~5% of native `rg` while emitting JSON spans, parallel fan-out,
-JoinSet cancellation, and per-span content-hash provenance for drift
-detection. Tighter p95 than `rg`'s subprocess path (38 ms vs. 207 ms).
+DeepAgents, Cursor etc. actually use) `/grep` lands at p50 **31.1 ms** —
+slightly **under** native `rg`'s 32.4 ms baseline on the same corpus,
+while emitting JSON spans, parallel fan-out, JoinSet cancellation, and
+tier-cache plumbing. `ast: true` warm sits at p50 **88.3 ms**, which
+includes content-hash drift detection plus tree-sitter widening.
 
 The earlier "p50 16.4 ms" claim in pre-release notes was contaminated by
 counting a cold first run inside the timed loop. The harness now discards

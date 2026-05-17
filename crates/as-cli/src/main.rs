@@ -177,6 +177,10 @@ async fn cmd_grep(
             case_insensitive,
             multi_line: false,
             max_hits_per_file: None,
+            // CLI grep is one-shot; AST widening happens inside the
+            // same process with the same bytes, so stamping a hash
+            // would only cost cycles with no drift to detect.
+            stamp_content_hash: false,
         },
         concurrency,
         max_object_bytes: 64 * 1024 * 1024,
@@ -209,6 +213,7 @@ async fn cmd_find(
             case_insensitive: false,
             multi_line: false,
             max_hits_per_file: None,
+            stamp_content_hash: false,
         },
         concurrency,
         max_object_bytes: 64 * 1024 * 1024,

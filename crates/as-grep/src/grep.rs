@@ -30,6 +30,12 @@ pub struct GrepOpts {
     pub case_insensitive: bool,
     pub multi_line: bool,
     pub max_hits_per_file: Option<usize>,
+    /// Stamp a sha256-of-bytes on every emitted span. Off by default
+    /// because it adds ~3-5 ms / matched file. Turn on when downstream
+    /// AST widening will run a drift filter — the hash is what lets
+    /// widen_spans drop spans whose source file has changed since
+    /// grep saw it. Pure `/grep ast=false` calls don't need it.
+    pub stamp_content_hash: bool,
 }
 
 /// Run a regex search over a single byte buffer associated with `uri`,
@@ -66,15 +72,17 @@ pub fn grep_bytes_spans(
         .map_err(|e| Error::Index(format!("bad regex: {e}")))?;
 
     let cap = opts.max_hits_per_file.unwrap_or(usize::MAX);
-    // Compute the file's content hash once and stamp every emitted
-    // span. Skip it when the search produces no hits (overhead is
-    // ~3-5 ms on a 1 MB file; not worth paying on empty results).
+    // `bytes` is held by the sink only when content_hash stamping is
+    // requested. Skipping the hash compute when the regex doesn't
+    // match keeps the no-hit fast path free; turning stamping off
+    // entirely (the default) skips it even when matches do occur.
     let mut sink = SpanSink {
         uri,
         spans: Vec::new(),
         cap,
         hash: None,
         bytes,
+        stamp_content_hash: opts.stamp_content_hash,
     };
 
     Searcher::new()
@@ -89,10 +97,12 @@ struct SpanSink<'a> {
     spans: Vec<Span>,
     cap: usize,
     /// Lazily computed sha256 of `bytes`. Filled on the first emitted
-    /// span and reused for the rest of the file so we never pay
-    /// sha256 cost when the regex doesn't match.
+    /// span (and only when `stamp_content_hash` is set) and reused for
+    /// the rest of the file so we never pay sha256 cost when the
+    /// regex doesn't match.
     hash: Option<String>,
     bytes: &'a [u8],
+    stamp_content_hash: bool,
 }
 
 impl Sink for SpanSink<'_> {
@@ -108,7 +118,7 @@ impl Sink for SpanSink<'_> {
         let start = mat.absolute_byte_offset();
         let end = start.saturating_add(mat.bytes().len() as u64);
         let snippet = String::from_utf8_lossy(mat.bytes()).trim_end().to_string();
-        if self.hash.is_none() {
+        if self.stamp_content_hash && self.hash.is_none() {
             self.hash = Some(content_hash(self.bytes));
         }
         self.spans.push(Span {

@@ -247,11 +247,15 @@ const MAX_HITS_CAP: usize = 5_000;
 /// without re-encoding into the public envelope.
 async fn run_grep(state: Arc<AppState>, req: &GrepRequest) -> Result<Vec<Span>, AppError> {
     let (fs, prefix) = state.open_fs(&req.uri)?;
+    // `stamp_content_hash` is only useful when widen_spans is going
+    // to run a drift filter on the spans. For `ast: false` we'd be
+    // paying sha256 per matched file with no consumer.
     let opts = ParallelOpts {
         grep: GrepOpts {
             case_insensitive: req.case_insensitive,
             multi_line: false,
             max_hits_per_file: None,
+            stamp_content_hash: req.ast,
         },
         concurrency: req.concurrency.clamp(1, MAX_CONCURRENCY),
         max_object_bytes: 64 * 1024 * 1024,

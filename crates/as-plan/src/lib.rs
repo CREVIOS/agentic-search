@@ -149,6 +149,7 @@ impl Planner {
                 case_insensitive: true,
                 multi_line: false,
                 max_hits_per_file: None,
+                stamp_content_hash: false,
             },
             concurrency,
             max_object_bytes: 64 * 1024 * 1024,

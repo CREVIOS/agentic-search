@@ -83,10 +83,10 @@ Pattern: `async fn`. 5 runs each via `bench/macro/run.py --runs 5
 
 | engine                       |  p50 ms |  p95 ms | mean ms | notes                                                  |
 | ---------------------------- | ------: | ------: | ------: | ------------------------------------------------------ |
-| `agentic-search grep`        |    38.4 |  1018.1 |   231.3 | parallel ripgrep-as-library over async S3-shaped reads |
-| `agentic-search grep --ast`  |   594.6 |   607.8 |   584.3 | tree-sitter widening, parse cache cold per invocation  |
-| `rg` (subprocess)            |    33.6 |   206.8 |    64.5 | native ripgrep, mmap + sync IO, raw line output        |
-| `probe search`               |   228.6 |  1542.0 |   471.1 | probelabs/probe 0.6.0 — applies its own ranking/dedup  |
+| `agentic-search grep`        |    29.6 |   865.4 |   195.9 | parallel ripgrep-as-library over async S3-shaped reads |
+| `agentic-search grep --ast`  |   628.6 |   955.2 |   705.6 | tree-sitter widening, parse cache cold per invocation  |
+| `rg` (subprocess)            |    32.4 |    53.2 |    35.8 | native ripgrep, mmap + sync IO, raw line output        |
+| `probe search`               |   191.5 |   413.9 |   246.4 | probelabs/probe 0.6.0 — applies its own ranking/dedup  |
 
 ### Server-shape (`agentic-search serve`, warm AST parse cache, pre-warm-discard harness)
 
@@ -97,16 +97,17 @@ P2) so the p50 reflects true steady-state.
 
 | endpoint                                | p50 ms | p95 ms | mean ms | notes                                                                |
 | --------------------------------------- | -----: | -----: | ------: | -------------------------------------------------------------------- |
-| `POST /grep`                            |   31.9 |   38.0 |    31.8 | ripgrep-as-library + content-addressed JSON spans, drift-checked     |
-| `POST /grep` (`ast: true`, warm cache)  |  118.4 |  124.5 |   104.5 | tree-sitter widening with parse-cache + content_hash drift filter    |
+| `POST /grep`                            |   31.1 |   47.2 |    33.4 | ripgrep-as-library + JSON spans, drift opt-in via `ast:true`         |
+| `POST /grep` (`ast: true`, warm cache)  |   88.3 |  146.1 |   102.7 | tree-sitter widening with parse-cache + content_hash drift filter    |
 
 Reading: against a persistent server (the agent-loop shape Claude
 Code, DeepAgents, Cursor etc. actually use) `/grep` p50 lands at
-31.9 ms — within ~5% of native `rg`'s 33.6 ms baseline on the same
-corpus, while emitting JSON spans with rank signals, parallel
-fan-out, JoinSet cancellation, content-hash provenance, and tier
-cache plumbing. `/grep --ast` warm sits at 118.4 ms; the gap vs. the
-CLI cold path (~600 ms) is what the parse cache buys.
+**31.1 ms** — slightly *under* native `rg`'s 32.4 ms baseline on the
+same corpus, while emitting JSON spans with rank signals, parallel
+fan-out, JoinSet cancellation, and tier cache plumbing. `/grep
+--ast` warm sits at **88.3 ms**, which includes content-hash drift
+detection plus tree-sitter widening; the gap vs. the CLI cold path
+(~600 ms) is what the parse cache buys.
 
 The earlier "p50 16.4 ms / 31.7 ms" numbers in pre-release notes
 counted a cold first run inside the timed loop — a contamination
