@@ -13,8 +13,9 @@ use as_core::{Error, Result};
 use as_embed::Embedder;
 use as_store::ArcStore;
 use futures::stream::{FuturesUnordered, StreamExt};
+use lru::LruCache;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -23,16 +24,20 @@ pub struct VecHit {
     pub score: f32,
 }
 
+/// Process-local cap on how many cluster files we keep decoded in
+/// memory. Tunable later via `VecIndex::with_capacity`; the default
+/// covers all-clusters-warm for the index sizes we ship with.
+pub const DEFAULT_CLUSTER_CACHE: usize = 4096;
+
 pub struct VecIndex {
     pub store: ArcStore,
     pub prefix: String,
     pub manifest: Manifest,
     centroids: Vec<f32>,
     docs: Vec<DocMeta>,
-    /// Cluster file bytes pinned in memory after the first probe.
-    /// Bounded indirectly by `as-cache` on the store path; this map
-    /// is a hot working set.
-    cluster_cache: parking_lot::Mutex<HashMap<u32, Arc<Vec<crate::index::ClusterRecord>>>>,
+    /// LRU of decoded cluster records keyed by cluster id. Cold
+    /// clusters get dropped before memory grows unbounded.
+    cluster_cache: parking_lot::Mutex<LruCache<u32, Arc<Vec<crate::index::ClusterRecord>>>>,
 }
 
 impl VecIndex {
@@ -71,7 +76,9 @@ impl VecIndex {
             manifest,
             centroids,
             docs,
-            cluster_cache: parking_lot::Mutex::new(HashMap::new()),
+            cluster_cache: parking_lot::Mutex::new(LruCache::new(
+                NonZeroUsize::new(DEFAULT_CLUSTER_CACHE).unwrap(),
+            )),
         })
     }
 
@@ -139,7 +146,7 @@ impl VecIndex {
         let mut all_records: Vec<Arc<Vec<crate::index::ClusterRecord>>> = Vec::with_capacity(probe);
         while let Some(r) = futs.next().await {
             let (cid, recs) = r?;
-            self.cluster_cache.lock().insert(cid, recs.clone());
+            self.cluster_cache.lock().put(cid, recs.clone());
             all_records.push(recs);
         }
 

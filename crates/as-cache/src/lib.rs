@@ -57,6 +57,11 @@ pub struct Tiered {
     mem: Mutex<MemoryLru>,
     key_index: Mutex<HashMap<String, HashSet<String>>>,
     store_id: String,
+    /// Counter incremented on every NVMe write; every Nth write
+    /// triggers a sweep that prunes the oldest cache entries until
+    /// disk usage drops below `cfg.nvme_bytes`. Cheap, opportunistic;
+    /// avoids tracking accurate live sizes across process restarts.
+    nvme_writes: std::sync::atomic::AtomicU64,
 }
 
 #[derive(Clone)]
@@ -167,6 +172,68 @@ impl Tiered {
             mem,
             key_index: Mutex::new(HashMap::new()),
             store_id,
+            nvme_writes: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// Every 64th NVMe write triggers a budget sweep.
+    const NVME_SWEEP_INTERVAL: u64 = 64;
+
+    /// Prune the oldest cache files until total bytes drop below
+    /// `cfg.nvme_bytes`. Best-effort; tolerates IO errors silently
+    /// because the cache is reproducible from the upstream store.
+    async fn nvme_sweep(&self) {
+        let dir = match self.cfg.nvme_dir.as_ref() {
+            Some(d) => d.clone(),
+            None => return,
+        };
+        let budget = self.cfg.nvme_bytes;
+        if budget == 0 {
+            return;
+        }
+        let result = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+            // Gather (path, mtime, size) for every entry under the cache dir.
+            let mut entries: Vec<(std::path::PathBuf, std::time::SystemTime, u64)> = Vec::new();
+            let mut total: u64 = 0;
+            for entry in walkdir::WalkDir::new(&dir)
+                .follow_links(false)
+                .into_iter()
+                .filter_map(|e| e.ok())
+            {
+                if !entry.file_type().is_file() {
+                    continue;
+                }
+                let md = match entry.metadata() {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                let size = md.len();
+                let mtime = md.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                total += size;
+                entries.push((entry.into_path(), mtime, size));
+            }
+            if total <= budget {
+                return Ok(());
+            }
+            // Oldest first.
+            entries.sort_by_key(|(_, mtime, _)| *mtime);
+            let mut over = total.saturating_sub(budget);
+            for (path, _, size) in entries {
+                if over == 0 {
+                    break;
+                }
+                // Drop the data file. Also drop its `.meta` sibling if
+                // it exists so a stale fingerprint cannot resurrect a
+                // missing payload.
+                let _ = std::fs::remove_file(&path);
+                let _ = std::fs::remove_file(path.with_extension("meta"));
+                over = over.saturating_sub(size);
+            }
+            Ok(())
+        })
+        .await;
+        if let Err(e) = result {
+            tracing::warn!(error = %e, "nvme sweep join failed");
         }
     }
 
@@ -252,6 +319,15 @@ impl Tiered {
             let _ = tokio::fs::write(&path, entry.bytes.as_ref()).await;
             if let Some(meta_path) = self.nvme_meta_path(cache_key) {
                 let _ = tokio::fs::write(&meta_path, entry.fingerprint.encode()).await;
+            }
+            // Budget sweep: every Nth write, prune the oldest entries
+            // until we are back under `cfg.nvme_bytes`.
+            let writes = self
+                .nvme_writes
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                + 1;
+            if writes % Self::NVME_SWEEP_INTERVAL == 0 {
+                self.nvme_sweep().await;
             }
         }
     }

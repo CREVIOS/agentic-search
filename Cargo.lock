@@ -197,6 +197,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "walkdir",
 ]
 
 [[package]]
@@ -399,6 +400,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "futures",
+ "lru 0.16.4",
  "parking_lot",
  "rayon",
  "serde",
