@@ -1,0 +1,42 @@
+# Local S3-compatible store for tests + benchmarks.
+#
+# Brings up a RustFS instance on :19000 (S3 API) with stable
+# test credentials. The agentic-search test suite reads
+# AWS_ENDPOINT_URL / AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY and
+# treats this just like real AWS S3.
+#
+# Usage:
+#   docker compose -f docker-compose.rustfs.yml up -d
+#   # in the test shell:
+#   export AWS_ACCESS_KEY_ID=testkey AWS_SECRET_ACCESS_KEY=testsecret
+#   export AWS_REGION=us-east-1 AWS_ENDPOINT_URL=http://localhost:19000
+#   export AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false AWS_ALLOW_HTTP=true
+#   export RUSTFS_S3_TEST=1
+#   cargo test -p as-store --test rustfs_s3 -- --nocapture
+
+services:
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: rustfs-it
+    ports:
+      - "19000:9000"
+    environment:
+      RUSTFS_ACCESS_KEY: testkey
+      RUSTFS_SECRET_KEY: testsecret
+    command:
+      - "server"
+      - "/data"
+      - "--address"
+      - "0.0.0.0:9000"
+    volumes:
+      - rustfs-data:/data
+      - rustfs-logs:/logs
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  rustfs-data:
+  rustfs-logs:

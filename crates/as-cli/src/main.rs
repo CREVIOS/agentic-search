@@ -88,6 +88,14 @@ enum Cmd {
 
 fn open_fs(uri: &str) -> anyhow::Result<(Arc<Fs>, String)> {
     let (store, prefix) = as_store::open(uri)?;
+    // Wrap remote stores in the tier cache so warm S3 reads stay near the
+    // CPU. Local `file://` doesn't benefit (OS page cache already hot), so
+    // we skip the wrap to avoid an extra hop.
+    let store = if uri.starts_with("file://") {
+        store
+    } else {
+        as_cache::wrap(store, as_cache::TierConfig::default())
+    };
     Ok((Arc::new(Fs::new(store)), prefix))
 }
 

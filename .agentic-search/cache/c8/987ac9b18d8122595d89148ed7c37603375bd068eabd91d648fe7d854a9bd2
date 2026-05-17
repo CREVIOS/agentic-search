@@ -1,6 +1,0 @@
-def alpha(x):
-    return x + 1
-
-def beta(x):
-    # TODO: optimize beta
-    return x * 2

@@ -85,11 +85,41 @@ def fmt_ms(seconds: float) -> str:
     return f"{seconds * 1000:.1f}ms"
 
 
+def upload_to_rustfs(corpus: Path, bucket: str, prefix: str) -> str:
+    """Upload corpus into a RustFS bucket and return the s3:// URI.
+
+    Caller is responsible for ``scripts/rustfs-up.sh`` already running.
+    """
+    os.environ.setdefault("AWS_ACCESS_KEY_ID", "testkey")
+    os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "testsecret")
+    os.environ.setdefault("AWS_REGION", "us-east-1")
+    endpoint = os.environ.get("AWS_ENDPOINT_URL", "http://localhost:19000")
+    # idempotent: skip if already present
+    head = subprocess.run(
+        ["aws", "--endpoint-url", endpoint, "s3", "ls", f"s3://{bucket}/{prefix}/"],
+        capture_output=True,
+    )
+    if head.returncode != 0 or not head.stdout.strip():
+        subprocess.run(
+            ["aws", "--endpoint-url", endpoint, "s3", "cp", str(corpus), f"s3://{bucket}/{prefix}/", "--recursive"],
+            check=True,
+            capture_output=True,
+        )
+    return f"s3://{bucket}/{prefix}"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", type=int, default=5)
     ap.add_argument("--pattern", default=r"async fn")
     ap.add_argument("--max-hits", type=int, default=5000)
+    ap.add_argument(
+        "--s3",
+        action="store_true",
+        help="Also benchmark against a local RustFS S3 endpoint",
+    )
+    ap.add_argument("--s3-bucket", default="agentic-search-it")
+    ap.add_argument("--s3-prefix", default="tokio")
     args = ap.parse_args()
 
     if not BIN.exists():
@@ -108,11 +138,11 @@ def main() -> int:
 
     engines: list[tuple[str, list[str]]] = [
         (
-            "agentic-search grep",
+            "agentic-search grep (local)",
             [str(BIN), "grep", uri, args.pattern, "--max-hits", str(args.max_hits), "--concurrency", "64"],
         ),
         (
-            "agentic-search grep --ast",
+            "agentic-search grep --ast (local)",
             [str(BIN), "grep", uri, args.pattern, "--max-hits", str(args.max_hits), "--concurrency", "64", "--ast"],
         ),
         ("rg (subprocess)", ["rg", "--no-heading", "-n", args.pattern, str(corpus)]),
@@ -121,7 +151,26 @@ def main() -> int:
         engines.append(("probe search", ["probe", "search", args.pattern, str(corpus)]))
     else:
         print("note: `probe` not on PATH; skipping probelabs/probe comparison")
-        print("      install via: cargo install --git https://github.com/probelabs/probe\n")
+        print("      install via: pnpm add -g @probelabs/probe\n")
+
+    if args.s3:
+        os.environ.setdefault("AWS_ENDPOINT_URL", "http://localhost:19000")
+        os.environ.setdefault("AWS_VIRTUAL_HOSTED_STYLE_REQUEST", "false")
+        os.environ.setdefault("AWS_ALLOW_HTTP", "true")
+        s3_uri = upload_to_rustfs(corpus, args.s3_bucket, args.s3_prefix)
+        print(f"s3 uri      : {s3_uri}")
+        engines.append(
+            (
+                "agentic-search grep (s3 cold/warm-mixed)",
+                [str(BIN), "grep", s3_uri, args.pattern, "--max-hits", str(args.max_hits), "--concurrency", "64"],
+            )
+        )
+        engines.append(
+            (
+                "agentic-search grep --ast (s3)",
+                [str(BIN), "grep", s3_uri, args.pattern, "--max-hits", str(args.max_hits), "--concurrency", "64", "--ast"],
+            )
+        )
 
     rows = []
     for name, cmd in engines:

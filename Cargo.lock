@@ -237,6 +237,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "as-ast",
+ "as-cache",
  "as-core",
  "as-fs",
  "as-grep",

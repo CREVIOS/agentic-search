@@ -17,6 +17,7 @@ as-store = { workspace = true }
 as-fs = { workspace = true }
 as-grep = { workspace = true }
 as-ast = { workspace = true }
+as-cache = { workspace = true }
 as-plan = { workspace = true }
 as-server = { workspace = true }
 anyhow = { workspace = true }
