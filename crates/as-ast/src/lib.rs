@@ -246,12 +246,33 @@ impl SpanCache {
 
     /// Get-or-build. Builds the index synchronously on miss.
     pub fn get_or_build(&self, uri: &str, bytes: &[u8]) -> Result<Option<Arc<ContainerIndex>>> {
+        self.get_or_build_with_hash(uri, bytes, None)
+    }
+
+    /// Like `get_or_build` but accepts a pre-computed `sha256:…` hash
+    /// so the caller can avoid hashing the same bytes twice. Pass
+    /// `None` to fall back to the internal hash; pass `Some(&hash)`
+    /// when an upstream stage (server-side drift check, on-the-wire
+    /// span provenance) has already paid the sha256 cost.
+    pub fn get_or_build_with_hash(
+        &self,
+        uri: &str,
+        bytes: &[u8],
+        precomputed_hash: Option<&str>,
+    ) -> Result<Option<Arc<ContainerIndex>>> {
         let lang = match language_for_uri(uri) {
             Some(l) => l,
             None => return Ok(None),
         };
-        let hash = content_hash(bytes);
-        let key = Self::key_from_lang(lang.id, &hash);
+        let hash_owned;
+        let hash = match precomputed_hash {
+            Some(h) => h,
+            None => {
+                hash_owned = content_hash(bytes);
+                &hash_owned
+            }
+        };
+        let key = Self::key_from_lang(lang.id, hash);
         if let Some(v) = self.inner.lock().get(&key).cloned() {
             return Ok(Some(v));
         }
@@ -372,7 +393,24 @@ pub fn widen_with_cache_cancellable(
         return Ok(());
     };
     let uri = first.uri.clone();
-    let index = match cache.get_or_build(&uri, bytes)? {
+    // Reuse the grep-stamped `content_hash` when every span agrees on
+    // it. That hash is sha256 of the same bytes we're about to feed
+    // to the parser, so `SpanCache::get_or_build_with_hash` can skip
+    // recomputing it (the server-side drift check has already paid
+    // the cost once; without this we'd pay it three times per file).
+    let stamped = spans
+        .iter()
+        .filter_map(|s| s.content_hash.as_deref())
+        .next();
+    let all_match = stamped
+        .map(|h| {
+            spans
+                .iter()
+                .all(|s| s.content_hash.as_deref().map(|x| x == h).unwrap_or(true))
+        })
+        .unwrap_or(false);
+    let precomputed = if all_match { stamped } else { None };
+    let index = match cache.get_or_build_with_hash(&uri, bytes, precomputed)? {
         Some(i) => i,
         None => return Ok(()),
     };
