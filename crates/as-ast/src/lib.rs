@@ -7,7 +7,7 @@
 //! Shipping languages (M2): Rust, Python, JavaScript, TypeScript, Go.
 
 use as_core::Result;
-use as_grep::{Span, SpanKind};
+use as_grep::{SourceStage, Span, SpanKind};
 use tree_sitter::{Language, Node, Parser};
 
 /// Detect a language from a URI by file extension.
@@ -167,12 +167,17 @@ pub fn widen_many(bytes: &[u8], spans: &mut [Span]) -> Result<()> {
         span.kind = classify_kind(definition.kind());
         span.line_range = [line_a, line_b];
         span.byte_range = start_byte..end_byte;
-        span.snippet = bytes.get(start_byte as usize..end_byte as usize).map(|s| {
-            String::from_utf8_lossy(s)
-                .chars()
-                .take(800)
-                .collect::<String>()
-        });
+        const SNIPPET_CHARS: usize = 800;
+        let raw = bytes
+            .get(start_byte as usize..end_byte as usize)
+            .map(String::from_utf8_lossy)
+            .map(|s| s.to_string());
+        if let Some(text) = raw {
+            let trimmed: String = text.chars().take(SNIPPET_CHARS).collect();
+            span.truncated = trimmed.chars().count() < text.chars().count();
+            span.snippet = Some(trimmed);
+        }
+        span.source_stage = Some(SourceStage::Ast);
     }
     Ok(())
 }
@@ -260,10 +265,9 @@ mod tests {
             uri: "file:///x.unknown".into(),
             byte_range: 0..1,
             line_range: [1, 1],
-            symbol: None,
             kind: SpanKind::Line,
-            snippet: None,
             score: 1.0,
+            ..Span::default()
         };
         let out = widen_to_definition(b"hello", span.clone()).unwrap();
         assert_eq!(out.kind, SpanKind::Line);

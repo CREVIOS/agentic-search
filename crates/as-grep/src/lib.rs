@@ -11,4 +11,4 @@ pub mod span;
 
 pub use grep::{grep_bytes, grep_bytes_spans, GrepOpts};
 pub use parallel::{ParallelGrep, ParallelOpts};
-pub use span::{Span, SpanKind};
+pub use span::{RankSignals, SourceStage, Span, SpanKind};

@@ -8,7 +8,7 @@
 use as_core::Result;
 use as_embed::{Embedder, Model};
 use as_fs::Fs;
-use as_grep::{GrepOpts, ParallelGrep, ParallelOpts, Span, SpanKind};
+use as_grep::{GrepOpts, ParallelGrep, ParallelOpts, RankSignals, SourceStage, Span, SpanKind};
 use as_store::ArcStore;
 use as_vec::query::{VecHit, VecIndex};
 use std::collections::HashMap;
@@ -39,6 +39,7 @@ pub fn rrf(lists: &[Vec<Span>], k: usize, top_k: usize) -> Vec<Span> {
         .take(top_k)
         .map(|(score, mut span)| {
             span.score = score;
+            span.source_stage = Some(SourceStage::Fusion);
             span
         })
         .collect()
@@ -52,10 +53,15 @@ pub fn vec_hits_to_spans(hits: Vec<VecHit>) -> Vec<Span> {
             uri: h.doc.uri.clone(),
             byte_range: h.doc.byte_range[0]..h.doc.byte_range[1],
             line_range: [1, 1],
-            symbol: None,
             kind: SpanKind::Block,
             snippet: Some(h.doc.snippet),
             score: h.score,
+            source_stage: Some(SourceStage::Vector),
+            rank_signals: Some(RankSignals {
+                cosine: Some(h.score),
+                ..RankSignals::default()
+            }),
+            ..Span::default()
         })
         .collect()
 }
@@ -167,10 +173,9 @@ mod tests {
             uri: uri.into(),
             byte_range: 0..1,
             line_range: [line, line],
-            symbol: None,
             kind: SpanKind::Line,
-            snippet: None,
             score,
+            ..Span::default()
         }
     }
 

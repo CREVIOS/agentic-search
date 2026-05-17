@@ -4,7 +4,7 @@
 //! against them. The intent is to keep ripgrep semantics (regex flavor,
 //! line-by-line, multi-line) without spawning a subprocess.
 
-use crate::{Span, SpanKind};
+use crate::{SourceStage, Span, SpanKind};
 use as_core::{Error, Hit, Result};
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::{Searcher, Sink, SinkMatch};
@@ -87,10 +87,11 @@ impl Sink for SpanSink<'_> {
             uri: self.uri.to_string(),
             byte_range: start..end,
             line_range: [line_start, line_end],
-            symbol: None,
             kind: SpanKind::Line,
             snippet: Some(snippet),
             score: 1.0,
+            source_stage: Some(SourceStage::Grep),
+            ..Span::default()
         });
         Ok(self.spans.len() < self.cap)
     }

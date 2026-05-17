@@ -12,10 +12,9 @@ fn synthetic_lists(n_lists: usize, list_len: usize) -> Vec<Vec<Span>> {
                         uri,
                         byte_range: 0..1,
                         line_range: [1, 1],
-                        symbol: None,
                         kind: SpanKind::Line,
-                        snippet: None,
                         score: 0.0,
+                        ..Span::default()
                     }
                 })
                 .collect()
