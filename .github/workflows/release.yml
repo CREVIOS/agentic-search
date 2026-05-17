@@ -13,11 +13,31 @@ on:
 
 permissions:
   contents: write
-  id-token: write  # OIDC for trusted PyPI / npm publishers
 
 jobs:
+  # Resolve the ref every downstream job checks out so a manual
+  # `workflow_dispatch` with `tag: v0.1.0` builds the tag, not whatever
+  # branch HEAD happens to be when the workflow fires.
+  resolve:
+    name: Resolve target ref
+    runs-on: ubuntu-latest
+    outputs:
+      ref: ${{ steps.r.outputs.ref }}
+      tag: ${{ steps.r.outputs.tag }}
+    steps:
+      - id: r
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            echo "ref=refs/tags/${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=${GITHUB_REF}" >> "$GITHUB_OUTPUT"
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
   build-cli:
     name: Build CLI (${{ matrix.target }})
+    needs: resolve
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -40,6 +60,8 @@ jobs:
             archive: agentic-search-x86_64-windows.zip
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -85,9 +107,12 @@ jobs:
 
   build-python:
     name: Build Python SDKs
+    needs: resolve
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.ref }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -105,9 +130,12 @@ jobs:
 
   build-node:
     name: Build Node SDK tarball
+    needs: resolve
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -128,29 +156,23 @@ jobs:
   release:
     name: GitHub Release
     runs-on: ubuntu-latest
-    needs: [build-cli, build-python, build-node]
+    needs: [resolve, build-cli, build-python, build-node]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.ref }}
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
       - name: Flatten artifacts
         run: |
           mkdir -p release
-          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' -o -name '*.whl' -o -name '*.tar.gz' -o -name '*.tgz' \) -exec cp -v {} release/ \;
-      - name: Resolve tag
-        id: tag
-        run: |
-          if [ -n "${{ inputs.tag }}" ]; then
-            echo "name=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          fi
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' -o -name '*.whl' -o -name '*.tgz' \) -exec cp -v {} release/ \;
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag.outputs.name }}
-          name: ${{ steps.tag.outputs.name }}
+          tag_name: ${{ needs.resolve.outputs.tag }}
+          name: ${{ needs.resolve.outputs.tag }}
           body_path: CHANGELOG.md
           files: release/*
           generate_release_notes: false

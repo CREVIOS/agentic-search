@@ -126,9 +126,11 @@ type ListResponse struct {
 
 // ReadResponse is the JSON envelope returned by /read.
 type ReadResponse struct {
-	URI     string `json:"uri"`
-	Content string `json:"content"`
-	Bytes   uint64 `json:"bytes"`
+	URI   string `json:"uri"`
+	Bytes uint64 `json:"bytes"`
+	// Text is the object body decoded as UTF-8. Absent (nil) when the
+	// object is binary; check `Bytes` for the total size in that case.
+	Text *string `json:"text,omitempty"`
 }
 
 // Grep issues a /grep request. `pattern` is a regex; `opts` may be nil.
@@ -154,12 +156,14 @@ func (c *Client) Search(ctx context.Context, uri, query string, opts *SearchOpti
 	return out.Spans, nil
 }
 
-// FindSymbol issues a /find_symbol request: tree-sitter-only symbol lookup.
+// FindSymbol issues a /find request: tree-sitter-verified symbol lookup
+// across camelCase / snake_case / kebab-case / PascalCase variants of
+// the supplied name.
 func (c *Client) FindSymbol(ctx context.Context, uri, name string, opts *FindSymbolOptions) ([]Span, error) {
 	body := map[string]any{"uri": uri, "symbol": name}
 	mergeOptions(body, opts)
 	var out SpansResponse
-	if err := c.post(ctx, "/find_symbol", body, &out); err != nil {
+	if err := c.post(ctx, "/find", body, &out); err != nil {
 		return nil, err
 	}
 	return out.Spans, nil

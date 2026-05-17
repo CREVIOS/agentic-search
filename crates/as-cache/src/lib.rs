@@ -308,7 +308,27 @@ impl Tiered {
         );
         let bytes = Bytes::from(data.ok()?);
         let fingerprint = Fingerprint::decode(&meta.ok()?)?;
+        // Touch the file mtime on a successful hit so the sweep treats
+        // recently-read entries as "young". Without this, a hot file
+        // that was written once and read 1000 times could be evicted
+        // before a cold file written more recently.
+        self.touch_nvme_entry(&path, &meta_path).await;
         Some(CacheEntry { bytes, fingerprint })
+    }
+
+    /// Update mtime on the data + meta pair to "now". Best-effort:
+    /// failures are silent because a missed touch only hurts the sweep
+    /// heuristic, never correctness.
+    async fn touch_nvme_entry(&self, data: &std::path::Path, meta: &std::path::Path) {
+        let data = data.to_path_buf();
+        let meta = meta.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            let now = filetime::FileTime::from_system_time(std::time::SystemTime::now());
+            let _ = filetime::set_file_mtime(&data, now);
+            let _ = filetime::set_file_mtime(&meta, now);
+        })
+        .await
+        .ok();
     }
 
     async fn nvme_store(&self, cache_key: &str, entry: &CacheEntry) {
@@ -560,6 +580,55 @@ mod tests {
         tiered.put("k", Bytes::from_static(b"new")).await.unwrap();
         let v = tiered.get("k").await.unwrap();
         assert_eq!(v.as_ref(), b"new");
+    }
+
+    #[tokio::test]
+    async fn nvme_hit_touches_mtime_for_lru_correctness() {
+        let dir = tempdir().unwrap();
+        let uri = format!("file://{}", dir.path().display());
+        let (upstream, _) = as_store::open(&uri).unwrap();
+        upstream
+            .put("hot", Bytes::from_static(b"hot-bytes"))
+            .await
+            .unwrap();
+        upstream
+            .put("cold", Bytes::from_static(b"cold-bytes"))
+            .await
+            .unwrap();
+        let cache_dir = tempdir().unwrap();
+        let cfg = TierConfig {
+            memory_entries: 1,
+            memory_bytes: 1024,
+            nvme_dir: Some(cache_dir.path().to_path_buf()),
+            nvme_bytes: 1024,
+        };
+        let tiered = Tiered::new(upstream.clone(), cfg);
+
+        // Write "hot" first.
+        let _ = tiered.get("hot").await.unwrap();
+        // Sleep enough for filesystem mtime granularity (HFS+ is 1s).
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        // Write "cold" — by raw write time, cold is newer than hot.
+        let _ = tiered.get("cold").await.unwrap();
+        // Sleep again, then *read* hot from NVMe. This should bump
+        // hot's mtime past cold's.
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        // Knock both out of memory so the next get hits NVMe.
+        upstream
+            .put("filler", Bytes::from_static(b"filler"))
+            .await
+            .unwrap();
+        let _ = tiered.get("filler").await.unwrap();
+        let _ = tiered.get("hot").await.unwrap();
+
+        let hot_path = tiered.nvme_path(&tiered.cache_key_full("hot")).unwrap();
+        let cold_path = tiered.nvme_path(&tiered.cache_key_full("cold")).unwrap();
+        let hot_mtime = std::fs::metadata(&hot_path).unwrap().modified().unwrap();
+        let cold_mtime = std::fs::metadata(&cold_path).unwrap().modified().unwrap();
+        assert!(
+            hot_mtime > cold_mtime,
+            "touch-on-hit should make hot mtime newer than cold: hot={hot_mtime:?} cold={cold_mtime:?}"
+        );
     }
 
     #[tokio::test]

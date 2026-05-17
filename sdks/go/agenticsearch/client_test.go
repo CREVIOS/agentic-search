@@ -40,6 +40,41 @@ func TestGrepRoundtrip(t *testing.T) {
 	}
 }
 
+func TestFindSymbolHitsFindRoute(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/find" {
+			t.Fatalf("FindSymbol must POST /find, got %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(SpansResponse{Spans: []Span{{Symbol: "verify_jwt"}}})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL)
+	spans, err := c.FindSymbol(context.Background(), "s3://x/", "verify_jwt", nil)
+	if err != nil {
+		t.Fatalf("find: %v", err)
+	}
+	if len(spans) != 1 || spans[0].Symbol != "verify_jwt" {
+		t.Fatalf("unexpected: %+v", spans)
+	}
+}
+
+func TestReadDecodesTextField(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"uri":"file:///x/a.txt","bytes":5,"text":"hello"}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL)
+	resp, err := c.Read(context.Background(), "file:///x/a.txt")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if resp.Bytes != 5 || resp.Text == nil || *resp.Text != "hello" {
+		t.Fatalf("unexpected: %+v", resp)
+	}
+}
+
 func TestErrorPropagation(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "bad uri", http.StatusBadRequest)

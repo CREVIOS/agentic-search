@@ -50,9 +50,11 @@ especially when the agent's "filesystem" is an S3 bucket. See
   via a parse-once-per-file `ContainerIndex` + content-addressed cache.
 - **Tier cache** (Turbopuffer-style): in-memory LRU → NVMe LRU with mtime
   sweep → object store. Warm queries approach local-FS speed.
-- **Parallel fan-out + RRF fusion.** One `/search` call issues grep, AST,
-  and vector probes on a `JoinSet` and fuses results with reciprocal-rank
-  fusion. Cancel-on-drop, no leaked tasks.
+- **Parallel fan-out + RRF fusion.** One `/search` call issues multiple
+  grep + AST probes on a `JoinSet` and fuses results with reciprocal-rank
+  fusion. Cancel-on-drop, no leaked tasks. The centroid vector index can
+  be fused in alongside when the corpus is indexed and the path is
+  enabled.
 - **Centroid vector index** (Turbopuffer-shaped). 2-roundtrip query on
   object storage. Off by default; enable when the corpus is non-code or
   semantic recall matters.
@@ -66,7 +68,8 @@ especially when the agent's "filesystem" is an S3 bucket. See
 ### CLI (Rust)
 
 ```bash
-cargo install --git https://github.com/CREVIOS/agentic-search --locked agentic-search-cli
+# install the `agentic-search` binary from the as-cli crate
+cargo install --git https://github.com/CREVIOS/agentic-search --locked as-cli
 agentic-search --version
 ```
 
@@ -78,15 +81,12 @@ cd agentic-search
 cargo install --path crates/as-cli --locked
 ```
 
+Pre-built binaries for linux/darwin/windows (x86_64 + arm64) are attached
+to every [GitHub Release](https://github.com/CREVIOS/agentic-search/releases).
+
 ### Python
 
-Generic client (REST + MCP):
-
-```bash
-pip install agentic-search
-```
-
-Adapters for specific agent frameworks:
+Framework-specific adapters (each one spawns / talks to the CLI):
 
 ```bash
 pip install claude-agent-search        # Claude Agent SDK
@@ -175,7 +175,7 @@ agent = create_deep_agent(tools=[search_tool()])
 ```ts
 import { AgenticSearchClient } from "@agentic-search/sdk";
 
-const client = new AgenticSearchClient({ baseUrl: "http://127.0.0.1:8787" });
+const client = new AgenticSearchClient("http://127.0.0.1:8787");
 const hits = await client.grep("s3://corp/", "HS256");
 console.log(hits);
 ```
@@ -186,7 +186,7 @@ console.log(hits);
 import "github.com/CREVIOS/agentic-search/sdks/go/agenticsearch"
 
 c := agenticsearch.New("http://127.0.0.1:8787")
-hits, _ := c.Grep(ctx, "s3://corp/", "HS256")
+hits, _ := c.Grep(ctx, "s3://corp/", "HS256", nil)
 ```
 
 ## Benchmarks

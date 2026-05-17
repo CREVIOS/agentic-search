@@ -21,7 +21,7 @@ agentic-search serve
 ```ts
 import { AgenticSearchClient } from "@agentic-search/sdk";
 
-const client = new AgenticSearchClient({ baseUrl: "http://127.0.0.1:8787" });
+const client = new AgenticSearchClient("http://127.0.0.1:8787");
 
 // grep across an S3 corpus
 const hits = await client.grep("s3://corp/", "HS256", { ast: true });

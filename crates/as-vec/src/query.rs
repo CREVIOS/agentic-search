@@ -15,6 +15,8 @@ use as_store::ArcStore;
 use futures::stream::{FuturesUnordered, StreamExt};
 use lru::LruCache;
 use serde::{Deserialize, Serialize};
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -150,9 +152,13 @@ impl VecIndex {
             all_records.push(recs);
         }
 
-        // Score all retrieved records.
+        // Score every retrieved record and keep only the top `k` via a
+        // bounded min-heap. The full-sort approach was O(N log N) over
+        // every record across every probed cluster; this is O(N log k),
+        // which matters once probe × cluster_size is in the millions.
         let dim = self.manifest.dim;
-        let mut scored: Vec<(f32, u32)> = Vec::new();
+        let k = k.max(1);
+        let mut heap: BinaryHeap<Reverse<HeapEntry>> = BinaryHeap::with_capacity(k + 1);
         for recs in &all_records {
             for r in recs.iter() {
                 let s: f32 = query
@@ -161,20 +167,60 @@ impl VecIndex {
                     .zip(r.vector.iter())
                     .map(|(a, b)| a * b)
                     .sum();
-                scored.push((s, r.doc_id));
+                let entry = HeapEntry {
+                    score: s,
+                    doc_id: r.doc_id,
+                };
+                if heap.len() < k {
+                    heap.push(Reverse(entry));
+                } else if let Some(Reverse(min)) = heap.peek() {
+                    if entry.score.total_cmp(&min.score) == std::cmp::Ordering::Greater {
+                        heap.pop();
+                        heap.push(Reverse(entry));
+                    }
+                }
             }
         }
-        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        scored.truncate(k);
+        // BinaryHeap order is not sorted; drain into a vec and sort
+        // *that* descending. Sorting `k` items, not all `N`.
+        let mut top: Vec<HeapEntry> = heap.into_iter().map(|Reverse(e)| e).collect();
+        top.sort_by(|a, b| b.score.total_cmp(&a.score));
 
-        Ok(scored
+        Ok(top
             .into_iter()
-            .filter_map(|(score, doc_id)| {
-                self.docs.get(doc_id as usize).map(|d| VecHit {
+            .filter_map(|e| {
+                self.docs.get(e.doc_id as usize).map(|d| VecHit {
                     doc: d.clone(),
-                    score,
+                    score: e.score,
                 })
             })
             .collect())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct HeapEntry {
+    score: f32,
+    doc_id: u32,
+}
+
+impl PartialEq for HeapEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.score.total_cmp(&other.score) == std::cmp::Ordering::Equal && self.doc_id == other.doc_id
+    }
+}
+impl Eq for HeapEntry {}
+impl PartialOrd for HeapEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for HeapEntry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Order by score using IEEE total_cmp so NaN is well-defined,
+        // then break ties on doc_id so equal-score entries are stable.
+        self.score
+            .total_cmp(&other.score)
+            .then_with(|| self.doc_id.cmp(&other.doc_id))
     }
 }

@@ -161,64 +161,68 @@ pub async fn read_manifest(
     }
 }
 
-/// Stream a manifest entry-by-entry. The manifest is gunzipped once,
-/// but its decompressed text is iterated line-by-line so peak memory
-/// stays at one entry, not millions. Returns the header so callers can
-/// branch on `count` / `prefix` without scanning the body.
+/// Stream a manifest entry-by-entry. The manifest body is **never
+/// materialised**: the gunzipped JSONL is consumed line-by-line via a
+/// `BufRead` reader so peak memory stays at one entry, regardless of
+/// whether the manifest covers 10 or 10 million objects. Returns the
+/// header so callers can branch on `count` / `prefix` without scanning
+/// the body.
 pub async fn stream_manifest(
     store: &dyn Store,
     prefix: &str,
 ) -> Result<Option<(ManifestHeader, ManifestIter)>> {
-    use std::io::Read;
+    use std::io::BufRead;
     let manifest_path = manifest_key(prefix);
     let bytes = match store.get(&manifest_path).await {
         Ok(b) => b,
         Err(Error::Store(_)) | Err(Error::Io(_)) => return Ok(None),
         Err(other) => return Err(other),
     };
-    let mut decoder = flate2::read::GzDecoder::new(&bytes[..]);
-    let mut text = String::new();
-    decoder
-        .read_to_string(&mut text)
-        .map_err(|e| Error::Other(format!("gunzip manifest: {e}")))?;
-    // Split off the header line eagerly; the rest stays as one buffer
-    // the iterator walks line offsets through. `text` is kept alive
-    // inside the iterator so individual entries don't allocate beyond
-    // a single JSON parse.
-    let nl = text
-        .find('\n')
-        .ok_or_else(|| Error::Other("manifest is empty".into()))?;
-    let header_line = text[..nl].to_string();
-    let header: ManifestHeader = serde_json::from_str(&header_line)
+    let mut reader = std::io::BufReader::new(flate2::read::GzDecoder::new(
+        std::io::Cursor::new(bytes),
+    ));
+    let mut header_line = String::new();
+    let read = reader
+        .read_line(&mut header_line)
+        .map_err(|e| Error::Other(format!("gunzip manifest header: {e}")))?;
+    if read == 0 {
+        return Err(Error::Other("manifest is empty".into()));
+    }
+    let header: ManifestHeader = serde_json::from_str(header_line.trim())
         .map_err(|e| Error::Other(format!("bad manifest header: {e}")))?;
-    let body = text.split_off(nl + 1);
-    Ok(Some((header, ManifestIter::new(body))))
+    Ok(Some((header, ManifestIter::new(Box::new(reader)))))
 }
 
-/// Iterator over manifest entries; yields each `ManifestEntry` from
-/// the gunzipped JSONL body without materializing the whole list.
+type ManifestRead = Box<dyn std::io::BufRead + Send + Sync + 'static>;
+
+/// Iterator over manifest entries. Wraps a buffered `Read` over the
+/// gunzipped JSONL body; one `read_line` call per `next_entry`, so
+/// peak heap stays at a single entry's line buffer.
 pub struct ManifestIter {
-    body: String,
-    cursor: usize,
+    reader: ManifestRead,
+    buf: String,
 }
 
 impl ManifestIter {
-    fn new(body: String) -> Self {
-        Self { body, cursor: 0 }
+    fn new(reader: ManifestRead) -> Self {
+        Self {
+            reader,
+            buf: String::new(),
+        }
     }
 
     pub fn next_entry(&mut self) -> Result<Option<ManifestEntry>> {
+        use std::io::BufRead;
         loop {
-            if self.cursor >= self.body.len() {
+            self.buf.clear();
+            let n = self
+                .reader
+                .read_line(&mut self.buf)
+                .map_err(|e| Error::Other(format!("read manifest line: {e}")))?;
+            if n == 0 {
                 return Ok(None);
             }
-            let rest = &self.body[self.cursor..];
-            let (line, advance) = match rest.find('\n') {
-                Some(nl) => (&rest[..nl], nl + 1),
-                None => (rest, rest.len()),
-            };
-            self.cursor += advance;
-            let trimmed = line.trim();
+            let trimmed = self.buf.trim();
             if trimmed.is_empty() {
                 continue;
             }

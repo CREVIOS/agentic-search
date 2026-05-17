@@ -337,16 +337,28 @@ pub(crate) fn symbol_case_variants(symbol: &str) -> Vec<String> {
             words.push(std::mem::take(cur).to_ascii_lowercase());
         }
     };
+    let chars: Vec<char> = symbol.chars().collect();
     let mut prev: Option<char> = None;
-    for c in symbol.chars() {
+    for (i, &c) in chars.iter().enumerate() {
         if c == '_' || c == '-' || c == '.' || c == ':' {
             push_cur(&mut cur, &mut words);
             prev = None;
             continue;
         }
-        // Camel/Pascal boundary: lower-or-digit followed by uppercase.
         if let Some(p) = prev {
-            if (p.is_ascii_lowercase() || p.is_ascii_digit()) && c.is_ascii_uppercase() {
+            // Boundary A: lower/digit → upper. Splits "fooBar" / "v2Api".
+            let camel_boundary =
+                (p.is_ascii_lowercase() || p.is_ascii_digit()) && c.is_ascii_uppercase();
+            // Boundary B: end-of-acronym. Two adjacent uppercase letters
+            // where the *next* char is lowercase mean we just left an
+            // acronym and entered a new TitleCase word, e.g.
+            // "HTTPServer" → ["HTTP", "Server"], "XMLHttpReq" →
+            // ["XML", "Http", "Req"]. Without this we'd see one giant
+            // word "httpserver" and miss case variants.
+            let acronym_boundary = p.is_ascii_uppercase()
+                && c.is_ascii_uppercase()
+                && chars.get(i + 1).is_some_and(|n| n.is_ascii_lowercase());
+            if camel_boundary || acronym_boundary {
                 push_cur(&mut cur, &mut words);
             }
         }
@@ -905,6 +917,39 @@ mod tests {
     fn symbol_case_variants_handles_short_identifier() {
         let v = symbol_case_variants("x");
         assert_eq!(v, vec!["x".to_string()]);
+    }
+
+    #[test]
+    fn symbol_case_variants_splits_at_acronym_boundary() {
+        // HTTPServer must split between "HTTP" and "Server" so the
+        // generated snake_case is "http_server", not "httpserver".
+        let v = symbol_case_variants("HTTPServer");
+        for want in [
+            "HTTPServer",
+            "http_server",
+            "http-server",
+            "HTTP_SERVER",
+            "HttpServer",
+            "httpServer",
+        ] {
+            assert!(v.contains(&want.to_string()), "missing {want}: {v:?}");
+        }
+    }
+
+    #[test]
+    fn symbol_case_variants_handles_pure_acronym() {
+        // "HTTPS" has no following lowercase so should remain one word.
+        let v = symbol_case_variants("HTTPS");
+        assert!(v.contains(&"HTTPS".to_string()));
+        assert!(v.contains(&"https".to_string()));
+        assert!(!v.iter().any(|s| s.contains('_')));
+    }
+
+    #[test]
+    fn symbol_case_variants_chained_acronym_then_word() {
+        // XMLHttpReq → XML, Http, Req
+        let v = symbol_case_variants("XMLHttpReq");
+        assert!(v.contains(&"xml_http_req".to_string()), "{v:?}");
     }
 
     #[tokio::test]
