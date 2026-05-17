@@ -1,21 +1,61 @@
 name: bench
 
 on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
   schedule:
     - cron: "0 6 * * *"
   workflow_dispatch:
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
+  # Cheap microbench gate. Runs on every PR. Fails the job if RRF or
+  # parallel grep regress more than the configured threshold against
+  # the cached baseline on `main`. Threshold is loose for now; tighten
+  # once we have a few weeks of nightly samples.
   micro:
-    name: criterion (ubuntu)
+    name: criterion (ubuntu, gate)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: cargo bench
-        run: cargo bench -p bench --bench rrf -- --output-format bencher | tee bench/results/criterion.txt
+      - name: cargo bench (bencher fmt)
+        run: |
+          mkdir -p bench/results
+          cargo bench -p bench --bench rrf -- --output-format bencher \
+            | tee bench/results/criterion.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: criterion-results
+          name: criterion-${{ github.sha }}
+          path: bench/results/
+
+  # Nightly macro suite: runs the Python harness (local grep + tokio
+  # corpus, no S3) and stores the JSON output so we can chart trends.
+  # Skipped on PRs because the corpus download + cold cargo build are
+  # too slow for the PR loop.
+  macro:
+    name: macro (nightly)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install ripgrep
+        run: sudo apt-get update -y && sudo apt-get install -y ripgrep
+      - name: cargo build release CLI
+        run: cargo build --release -p as-cli
+      - name: macro bench
+        run: python3 bench/macro/run.py --runs 5 --server
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macro-${{ github.run_id }}
           path: bench/results/
