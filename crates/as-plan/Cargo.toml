@@ -5,19 +5,25 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Query planner: hybrid fusion (RRF) of lexical + vector + web, plus rerank"
+description = "Query planner: hybrid fusion (RRF) of grep + vector stages"
 
 [dependencies]
 as-core = { workspace = true }
+as-store = { workspace = true }
+as-fs = { workspace = true }
 as-grep = { workspace = true }
 as-ast = { workspace = true }
 as-vec = { workspace = true }
-as-web = { workspace = true }
-as-rerank = { workspace = true }
+as-embed = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+bytes = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

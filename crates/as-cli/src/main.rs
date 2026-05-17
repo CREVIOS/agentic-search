@@ -58,18 +58,38 @@ enum Cmd {
         #[arg(long, default_value_t = 200)]
         max_hits: usize,
     },
-    /// Build a tantivy index over a prefix (optional / non-code corpora).
+    /// Build a Turbopuffer-style centroid vector index over a corpus
+    /// prefix and write it under `<corpus>/.agentic-search/index/<ns>/`.
     Index {
+        /// Corpus URI (e.g. `s3://my-corpus/docs/` or `file:///path`).
         uri: String,
-        #[arg(long, default_value = ".agentic-search/index")]
-        out: String,
+        /// Namespace name; the index lives at
+        /// `<uri>/.agentic-search/index/<namespace>/`.
+        #[arg(long, default_value = "default")]
+        namespace: String,
+        /// Maximum file size to index, in bytes.
+        #[arg(long, default_value_t = 4 * 1024 * 1024)]
+        max_file_bytes: u64,
+        /// Cluster count (`K`). Defaults to `sqrt(num_chunks)`.
+        #[arg(long)]
+        k: Option<usize>,
+        /// Glob pattern (relative to `uri`) selecting files to index.
+        #[arg(long, default_value = "**/*.md")]
+        glob: String,
     },
-    /// Run a query against an index.
+    /// Run a hybrid grep + vector search against an indexed corpus.
     Query {
-        index: String,
+        /// Corpus URI (must match the URI used at index time).
+        uri: String,
+        /// Natural-language query.
         query: String,
+        #[arg(long, default_value = "default")]
+        namespace: String,
         #[arg(short = 'k', long, default_value_t = 10)]
         k: usize,
+        /// Number of clusters to inspect (Turbopuffer-style `probe`).
+        #[arg(long, default_value_t = 8)]
+        probe: usize,
     },
     /// Serve the HTTP + MCP API.
     Serve {
@@ -268,6 +288,128 @@ fn regex_escape(s: &str) -> String {
     out
 }
 
+async fn cmd_index(
+    uri: String,
+    namespace: String,
+    max_file_bytes: u64,
+    k: Option<usize>,
+    glob: String,
+) -> anyhow::Result<()> {
+    use as_embed::Model;
+    use as_vec::build::{build_index, chunk_text, InputDoc};
+    use futures::stream::StreamExt;
+
+    let (fs, prefix) = open_fs(&uri)?;
+    let (store, _) = as_store::open(&uri)?;
+
+    let glob_pat = glob.clone();
+    let mut listing = fs.glob(&prefix, &glob_pat)?;
+    let mut docs: Vec<InputDoc> = Vec::new();
+    let mut files_seen = 0usize;
+    while let Some(item) = listing.next().await {
+        let meta = item?;
+        files_seen += 1;
+        if meta.size == 0 || meta.size > max_file_bytes {
+            continue;
+        }
+        let bytes = match fs.read_fresh(&meta).await {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!(key = %meta.key, error = %e, "read failed, skipping");
+                continue;
+            }
+        };
+        let text = match std::str::from_utf8(&bytes) {
+            Ok(s) => s.to_string(),
+            Err(_) => continue, // not utf-8
+        };
+        for (start, end, chunk) in chunk_text(&text, 1200, 200) {
+            docs.push(InputDoc {
+                uri: meta.key.clone(),
+                byte_range: [start, end],
+                text: chunk,
+            });
+        }
+    }
+    if docs.is_empty() {
+        anyhow::bail!(
+            "no indexable files matched glob {glob_pat:?} under {uri} (scanned {files_seen} entries)"
+        );
+    }
+    let ns_prefix = format!(
+        "{}.agentic-search/index/{}",
+        if prefix.is_empty() {
+            String::new()
+        } else {
+            format!("{}/", prefix.trim_end_matches('/'))
+        },
+        namespace
+    );
+    let manifest = build_index(store, &ns_prefix, docs, Model::default(), k, 8).await?;
+    println!(
+        "indexed {} chunks ({} files scanned) into {}/{}/  K={} dim={}",
+        manifest.num_docs,
+        files_seen,
+        uri.trim_end_matches('/'),
+        ns_prefix,
+        manifest.k,
+        manifest.dim
+    );
+    Ok(())
+}
+
+async fn cmd_query(
+    uri: String,
+    namespace: String,
+    query: String,
+    k: usize,
+    probe: usize,
+) -> anyhow::Result<()> {
+    use as_embed::{Embedder, Model};
+    use as_plan::{PlanInputs, Planner};
+    use as_vec::query::VecIndex;
+
+    let (fs, prefix) = open_fs(&uri)?;
+    let (store, _) = as_store::open(&uri)?;
+    let ns_prefix = format!(
+        "{}.agentic-search/index/{}",
+        if prefix.is_empty() {
+            String::new()
+        } else {
+            format!("{}/", prefix.trim_end_matches('/'))
+        },
+        namespace
+    );
+
+    let vec_index = match VecIndex::open(store, &ns_prefix).await {
+        Ok(i) => Some(i),
+        Err(e) => {
+            tracing::warn!(error = %e, "no vector index at {ns_prefix} — running grep-only");
+            None
+        }
+    };
+    let _embedder_guard: Option<Embedder> = vec_index.as_ref().and_then(|_| {
+        // Pre-warm embedder so the first query in this run doesn't pay
+        // for cold model init at the planner boundary.
+        Embedder::new(Model::default()).ok()
+    });
+
+    let plan = PlanInputs {
+        fs: fs.clone(),
+        grep_prefix: &prefix,
+        query: &query,
+        k,
+        grep_max_hits: k.saturating_mul(4).clamp(32, 512),
+        grep_concurrency: 32,
+        vec_index: vec_index.as_ref(),
+        vec_probe: probe,
+        vec_store: None,
+    };
+    let spans = Planner::search(plan).await?;
+    print_spans(&spans);
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -299,12 +441,20 @@ async fn main() -> anyhow::Result<()> {
             concurrency,
             max_hits,
         } => cmd_find(uri, symbol, concurrency, max_hits).await?,
-        Cmd::Index { uri, out } => {
-            println!("index (use as-index crate directly for now) {uri} -> {out}");
-        }
-        Cmd::Query { index, query, k } => {
-            println!("query (use as-index crate directly for now) {index} q={query:?} k={k}");
-        }
+        Cmd::Index {
+            uri,
+            namespace,
+            max_file_bytes,
+            k,
+            glob,
+        } => cmd_index(uri, namespace, max_file_bytes, k, glob).await?,
+        Cmd::Query {
+            uri,
+            query,
+            namespace,
+            k,
+            probe,
+        } => cmd_query(uri, namespace, query, k, probe).await?,
         Cmd::Serve { bind, mcp } => {
             if mcp {
                 as_server::mcp_stdio::run().await?;

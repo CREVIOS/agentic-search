@@ -19,6 +19,8 @@ as-grep = { workspace = true }
 as-ast = { workspace = true }
 as-cache = { workspace = true }
 as-plan = { workspace = true }
+as-vec = { workspace = true }
+as-embed = { workspace = true }
 as-server = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }

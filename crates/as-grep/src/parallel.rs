@@ -89,6 +89,17 @@ impl ParallelGrep {
             if meta.size > opts.max_object_bytes {
                 continue;
             }
+            // Skip hidden directories (`/.foo/...`) by default. This
+            // matches ripgrep semantics and keeps caches like
+            // `.agentic-search/`, `.fastembed_cache/`, `.git/` out of
+            // results.
+            if meta
+                .key
+                .split('/')
+                .any(|segment| segment.starts_with('.') && segment.len() > 1)
+            {
+                continue;
+            }
 
             let fs = self.fs.clone();
             let pattern = pattern.to_string();
