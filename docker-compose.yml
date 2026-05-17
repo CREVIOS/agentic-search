@@ -1,0 +1,40 @@
+# One-command launch of the agentic-search REST + MCP server.
+#
+# Usage:
+#   docker compose up -d
+#   curl -s http://127.0.0.1:8787/health
+#
+# To point the server at an S3-compatible bucket, override AS_S3_*
+# variables — or supply standard AWS_* env (the AWS SDK reads them
+# directly).
+
+services:
+  agentic-search:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: agentic-search:0.1.0
+    container_name: agentic-search
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+      # AWS SDK env (pick whichever auth your bucket needs)
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL:-}
+    volumes:
+      # Persist the NVMe LRU + fastembed model cache across container
+      # restarts so warm queries stay warm.
+      - agentic-cache:/var/lib/agentic-search
+    healthcheck:
+      test: ["CMD", "agentic-search", "--version"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  agentic-cache:

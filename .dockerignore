@@ -1,0 +1,22 @@
+# Heaviest things in the tree that are not the build input.
+target/
+**/target/
+node_modules/
+**/node_modules/
+.git/
+.github/
+docs/
+bench/data/
+bench/results/
+.fastembed_cache/
+**/.fastembed_cache/
+.agentic-search/
+**/.agentic-search/
+sdks/
+integration_tests/
+examples/
+.env
+.env.*
+*.log
+.vscode/
+.idea/

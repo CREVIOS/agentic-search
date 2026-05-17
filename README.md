@@ -84,6 +84,18 @@ cargo install --path crates/as-cli --locked
 Pre-built binaries for linux/darwin/windows (x86_64 + arm64) are attached
 to every [GitHub Release](https://github.com/CREVIOS/agentic-search/releases).
 
+### Docker
+
+```bash
+docker compose up -d
+curl -s http://127.0.0.1:8787/health
+```
+
+The image runs as a non-root user, persists the NVMe LRU + fastembed
+model cache to a named volume, and binds `127.0.0.1:8787` on the host
+by default. Override `AWS_*` env vars in a `.env` file alongside
+`docker-compose.yml` to point the server at an S3 / R2 / GCS bucket.
+
 ### Python
 
 Framework-specific adapters (each one spawns / talks to the CLI):
