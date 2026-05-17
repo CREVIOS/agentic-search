@@ -697,8 +697,23 @@ async fn widen_spans(
                 return Ok(Vec::new());
             }
             let bytes = fs.read(&uri).await?;
+            // Drift guard: grep emitted these spans against a
+            // possibly-older copy of the file. If the file shrank
+            // under us, span byte ranges may now point past EOF and
+            // widening would either parse garbage or feed tree-sitter
+            // invalid bytes. Drop any span whose range overshoots the
+            // current file length before sending the group through
+            // the parser. The remaining spans either survive intact
+            // or get widened correctly against fresh content.
+            let file_len = bytes.len() as u64;
+            let mut group: Vec<Span> = group
+                .into_iter()
+                .filter(|s| s.byte_range.end <= file_len)
+                .collect();
+            if group.is_empty() {
+                return Ok(Vec::new());
+            }
             tokio::task::spawn_blocking(move || {
-                let mut group = group;
                 widen_with_cache_cancellable(&cache, &bytes, &mut group, &|| {
                     cancelled.load(Ordering::Acquire)
                 })?;
