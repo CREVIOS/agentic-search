@@ -3,7 +3,7 @@
 //! bridge in `mcp_stdio` adapts these same JSON shapes for stdio clients.
 
 use crate::AppState;
-use as_ast::widen_to_definition;
+use as_ast::widen_many;
 use as_fs::Fs;
 use as_grep::{GrepOpts, ParallelGrep, ParallelOpts, Span};
 use axum::{extract::State, http::StatusCode, Json};
@@ -216,15 +216,15 @@ async fn widen_spans(fs: &Arc<Fs>, spans: Vec<Span>) -> anyhow::Result<Vec<Span>
     }
     let mut out: Vec<Span> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    for (uri, group) in by_uri {
+    for (uri, mut group) in by_uri {
         let bytes = match fs.read(&uri).await {
             Ok(b) => b,
             Err(_) => continue,
         };
+        widen_many(&bytes, &mut group)?;
         for s in group {
-            let w = widen_to_definition(&bytes, s)?;
-            if seen.insert(w.dedup_key()) {
-                out.push(w);
+            if seen.insert(s.dedup_key()) {
+                out.push(s);
             }
         }
     }

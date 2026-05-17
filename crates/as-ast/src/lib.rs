@@ -119,63 +119,62 @@ pub struct LangSpec {
     pub name_kinds: &'static [&'static str],
 }
 
-/// Widen a (Line) span to its enclosing function/class/method using
-/// tree-sitter. Returns the original span untouched if no AST mapping
-/// applies.
+/// Widen a single (Line) span to its enclosing function/class/method via
+/// tree-sitter. Convenience wrapper around `widen_many` — prefer
+/// `widen_many` if you have many spans against the same file: it parses
+/// once and walks the cached tree for each span.
 pub fn widen_to_definition(bytes: &[u8], span: Span) -> Result<Span> {
-    let lang = match language_for_uri(&span.uri) {
+    let mut spans = vec![span];
+    widen_many(bytes, &mut spans)?;
+    Ok(spans.pop().unwrap())
+}
+
+/// Widen many spans against a single file's bytes in one parser pass.
+/// Spans that do not map onto a container are returned unchanged.
+pub fn widen_many(bytes: &[u8], spans: &mut [Span]) -> Result<()> {
+    let Some(first) = spans.first() else {
+        return Ok(());
+    };
+    let lang = match language_for_uri(&first.uri) {
         Some(l) => l,
-        None => return Ok(span),
+        None => return Ok(()),
     };
     let mut parser = Parser::new();
     if parser.set_language(&lang.language).is_err() {
-        return Ok(span);
+        return Ok(());
     }
     let tree = match parser.parse(bytes, None) {
         Some(t) => t,
-        None => return Ok(span),
+        None => return Ok(()),
     };
-    // The grep span starts at the beginning of a line (which is whitespace
-    // for indented languages); tree-sitter does not give us a useful node
-    // for whitespace. Skip past leading spaces / tabs to land on a real
-    // token before walking up.
-    let line_start = span.byte_range.start as usize;
-    let line_end = (span.byte_range.end as usize).min(bytes.len());
-    let probe = first_non_whitespace(bytes, line_start, line_end);
     let root = tree.root_node();
-    let target = match root.descendant_for_byte_range(probe, probe.saturating_add(1)) {
-        Some(n) => n,
-        None => return Ok(span),
-    };
-    let definition = match enclosing_container(target, lang.container_kinds) {
-        Some(n) => n,
-        None => return Ok(span),
-    };
 
-    let start_byte = definition.start_byte() as u64;
-    let end_byte = definition.end_byte() as u64;
-    let line_start = (definition.start_position().row + 1) as u32;
-    let line_end = (definition.end_position().row + 1) as u32;
-    let symbol = symbol_name(definition, bytes);
-
-    let kind = classify_kind(definition.kind());
-
-    let snippet = bytes.get(start_byte as usize..end_byte as usize).map(|s| {
-        String::from_utf8_lossy(s)
-            .chars()
-            .take(800)
-            .collect::<String>()
-    });
-
-    Ok(Span {
-        uri: span.uri,
-        byte_range: start_byte..end_byte,
-        line_range: [line_start, line_end],
-        symbol,
-        kind,
-        snippet,
-        score: span.score,
-    })
+    for span in spans.iter_mut() {
+        let line_start = span.byte_range.start as usize;
+        let line_end = (span.byte_range.end as usize).min(bytes.len());
+        let probe = first_non_whitespace(bytes, line_start, line_end);
+        let Some(target) = root.descendant_for_byte_range(probe, probe.saturating_add(1)) else {
+            continue;
+        };
+        let Some(definition) = enclosing_container(target, lang.container_kinds) else {
+            continue;
+        };
+        let start_byte = definition.start_byte() as u64;
+        let end_byte = definition.end_byte() as u64;
+        let line_a = (definition.start_position().row + 1) as u32;
+        let line_b = (definition.end_position().row + 1) as u32;
+        span.symbol = symbol_name(definition, bytes);
+        span.kind = classify_kind(definition.kind());
+        span.line_range = [line_a, line_b];
+        span.byte_range = start_byte..end_byte;
+        span.snippet = bytes.get(start_byte as usize..end_byte as usize).map(|s| {
+            String::from_utf8_lossy(s)
+                .chars()
+                .take(800)
+                .collect::<String>()
+        });
+    }
+    Ok(())
 }
 
 fn first_non_whitespace(bytes: &[u8], start: usize, end: usize) -> usize {

@@ -1,4 +1,4 @@
-use as_ast::widen_to_definition;
+use as_ast::widen_many;
 use as_fs::Fs;
 use as_grep::{grep_bytes_spans, GrepOpts, ParallelGrep, ParallelOpts, Span};
 use clap::{Parser, Subcommand};
@@ -144,22 +144,22 @@ async fn cmd_grep(
     let spans = pg.scan_prefix(&prefix, &pattern, &opts).await?;
     let mut printed: Vec<Span> = Vec::with_capacity(spans.len());
     if ast {
-        // Read each file once and widen the spans inside it.
-        use std::collections::HashMap;
+        // Group by URI so each file is parsed once for many spans.
+        use std::collections::{HashMap, HashSet};
         let mut by_uri: HashMap<String, Vec<Span>> = HashMap::new();
         for s in spans {
             by_uri.entry(s.uri.clone()).or_default().push(s);
         }
-        for (uri, group) in by_uri {
+        let mut seen: HashSet<String> = HashSet::new();
+        for (uri, mut group) in by_uri {
             let bytes = match fs.read(&uri).await {
                 Ok(b) => b,
                 Err(_) => continue,
             };
-            let mut seen = std::collections::HashSet::new();
+            widen_many(&bytes, &mut group)?;
             for s in group {
-                let w = widen_to_definition(&bytes, s)?;
-                if seen.insert(w.dedup_key()) {
-                    printed.push(w);
+                if seen.insert(s.dedup_key()) {
+                    printed.push(s);
                 }
             }
         }
