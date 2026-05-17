@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  packages: write  # publish container images to GHCR
 
 jobs:
   # Resolve the ref every downstream job checks out so a manual
@@ -153,10 +154,43 @@ jobs:
           name: node-tarball
           path: sdks/node/agentic-search/*.tgz
 
+  build-docker:
+    name: Build + push container image (GHCR)
+    needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.ref }}
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Lowercase repo owner
+        id: owner
+        run: echo "name=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve image tag (strip leading `v`)
+        id: imgtag
+        run: echo "name=$(echo '${{ needs.resolve.outputs.tag }}' | sed 's/^v//')" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ steps.owner.outputs.name }}/agentic-search:${{ steps.imgtag.outputs.name }}
+            ghcr.io/${{ steps.owner.outputs.name }}/agentic-search:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   release:
     name: GitHub Release
     runs-on: ubuntu-latest
-    needs: [resolve, build-cli, build-python, build-node]
+    needs: [resolve, build-cli, build-python, build-node, build-docker]
     steps:
       - uses: actions/checkout@v4
         with:

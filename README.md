@@ -87,14 +87,20 @@ to every [GitHub Release](https://github.com/CREVIOS/agentic-search/releases).
 ### Docker
 
 ```bash
+# pull the multi-arch image from GHCR (each release pushes a fresh tag)
+docker run --rm -p 127.0.0.1:8787:8787 ghcr.io/crevios/agentic-search:latest
+
+# or build + run with the included compose file (persists the cache)
 docker compose up -d
 curl -s http://127.0.0.1:8787/health
 ```
 
 The image runs as a non-root user, persists the NVMe LRU + fastembed
 model cache to a named volume, and binds `127.0.0.1:8787` on the host
-by default. Override `AWS_*` env vars in a `.env` file alongside
-`docker-compose.yml` to point the server at an S3 / R2 / GCS bucket.
+by default. Multi-arch (linux/amd64 + linux/arm64) images are pushed
+to `ghcr.io/crevios/agentic-search:<version>` on every tagged release.
+Override `AWS_*` env vars in a `.env` file alongside `docker-compose.yml`
+to point the server at an S3 / R2 / GCS bucket.
 
 ### Python
 
