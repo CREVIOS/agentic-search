@@ -24,10 +24,69 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   cargo-deny:
-    name: cargo-deny (licenses + advisories)
+    name: cargo-deny (Rust licenses + advisories)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check advisories bans licenses sources
+
+  pip-audit:
+    name: pip-audit (Python SDK advisories)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pkg:
+          - sdks/python/claude_agent_search
+          - sdks/python/openai_agentic_search
+          - sdks/python/deepagents_search
+          - sdks/python/langchain_agentic_search
+          - sdks/python/crewai_agentic_search
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pip-audit
+        run: python -m pip install --upgrade pip pip-audit
+      - name: Audit ${{ matrix.pkg }}
+        run: pip-audit --strict --progress-spinner off "${{ matrix.pkg }}"
+
+  npm-audit:
+    name: npm audit (Node SDK)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdks/node/agentic-search
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - run: pnpm install --frozen-lockfile=false
+      - name: Audit
+        # pnpm audit returns non-zero on advisories of any severity.
+        # We treat moderate+ as a failure so PRs cannot land a known
+        # high CVE; low-severity advisories print a warning only.
+        run: pnpm audit --audit-level=moderate
+
+  govulncheck:
+    name: govulncheck (Go SDK)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdks/go/agenticsearch
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: Run govulncheck
+        run: govulncheck ./...
