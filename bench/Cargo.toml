@@ -12,11 +12,21 @@ publish = false
 name = "rrf"
 harness = false
 
+[[bin]]
+name = "sift1m"
+path = "src/bin/sift1m.rs"
+
 [dependencies]
 as-core = { workspace = true }
 as-plan = { workspace = true }
 as-grep = { workspace = true }
+as-vec = { workspace = true }
+as-store = { workspace = true }
+as-embed = { workspace = true }
 serde_json = { workspace = true }
+tokio = { workspace = true }
+bytes = { workspace = true }
+anyhow = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

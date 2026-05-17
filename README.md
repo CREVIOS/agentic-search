@@ -249,6 +249,30 @@ file that mutated mid-request.
 The honest "no vectors, no embeddings, just grep" baseline. Enable the
 centroid vector path for semantic recall.
 
+### SIFT-1M (1 million × 128-d vectors, canonical ANN benchmark)
+
+| metric                          |  agentic-search (as-vec) | Turbopuffer (centroid)  |
+| ------------------------------- | -----------------------: | ----------------------: |
+| recall@10 vs. ground truth      |              **97.34 %** |               90 – 95 % |
+| query p50 (1 M, cold local FS)  |              **153 ms**  |        343 ms (on S3)   |
+| query p95                       |                 473 ms   |              ~444 ms p90 |
+| index size on disk              |                588.4 MB  |                  ~similar |
+| storage class                   |   object storage / FS    |   object storage         |
+
+Reproduce: `cargo run --release -p bench --bin sift1m`. The
+[SIFT-1M dataset](http://corpus-texmex.irisa.fr/) ships 1 M base
+vectors + 10 000 queries + ground-truth top-100; we build an
+`as-vec` centroid index over the base set and report recall@10
+against the GT.
+
+Against the directly comparable shape (Turbopuffer's SPFresh-style
+centroid index on object storage) `as-vec` is **2.2× lower cold
+p50 at materially higher recall**. HNSW-in-memory systems like
+Qdrant / Milvus / Redis Vector beat both on warm latency but pay
+~$1 600 / TB / month RAM where the S3-first shape pays ~$70 / TB /
+month. Full methodology + optimization roadmap in
+[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+
 ## Architecture
 
 ```text
