@@ -35,6 +35,12 @@ pub struct VecHit {
 /// if you don't.
 pub const DEFAULT_CLUSTER_CACHE: usize = 256;
 
+/// Upper bound on the per-namespace cluster cache. Defends against a
+/// hostile manifest claiming `k = 10_000_000`: without a cap the LRU
+/// would be sized for tens of GB of clusters before the LRU eviction
+/// path ever kicks in.
+pub const MAX_CLUSTER_CACHE: usize = 8192;
+
 pub struct VecIndex {
     pub store: ArcStore,
     pub prefix: String,
@@ -76,13 +82,22 @@ impl VecIndex {
                 .map_err(|e| Error::Index(format!("bad doc meta: {e}")))?;
             docs.push(d);
         }
-        // Cluster cache capacity = max(DEFAULT_CLUSTER_CACHE, k). On
-        // a 1024-cluster index with default 256 capacity the LRU
-        // thrashes (sweep workloads touch every cluster), so warm
-        // queries kept paying cold decode cost. Sizing to `k` makes
-        // a full sweep amortise: cluster gets decoded once, every
-        // future hit returns the cached Arc.
-        let cluster_cache_cap = DEFAULT_CLUSTER_CACHE.max(manifest.k);
+        // Cluster cache capacity = clamp(DEFAULT_CLUSTER_CACHE, k,
+        // MAX_CLUSTER_CACHE). On a 1024-cluster index with default
+        // 256 capacity the LRU thrashed (sweep workloads touch every
+        // cluster), so warm queries kept paying cold decode cost.
+        // Sizing up to `k` makes a full sweep amortise: cluster gets
+        // decoded once, every future hit returns the cached Arc.
+        //
+        // The upper cap `MAX_CLUSTER_CACHE = 8192` defends against a
+        // hostile or pathological manifest claiming `k` in the
+        // millions. With ~525 KB per SIFT-shape cluster, 8192 caps
+        // resident at ~4 GB worst case; larger workloads should tune
+        // explicitly via a config rather than letting the manifest
+        // dictate RAM bounds.
+        let cluster_cache_cap = manifest
+            .k
+            .clamp(DEFAULT_CLUSTER_CACHE, MAX_CLUSTER_CACHE);
         Ok(Self {
             store,
             prefix,

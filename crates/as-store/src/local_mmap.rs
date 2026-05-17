@@ -115,7 +115,7 @@ fn mmap_file(path: &Path) -> Result<Option<Mmap>> {
 #[async_trait]
 impl Store for LocalMmapStore {
     async fn get(&self, key: &str) -> Result<Bytes> {
-        // Inline mmap. spawn_blocking adds ~50-100 µs of scheduler
+        // Inline mmap. spawn_blocking added ~50-100 µs of scheduler
         // round-trip per call; mmap itself is a single syscall that
         // sets up a page-table mapping (~10 µs on macOS / Linux),
         // not blocking I/O. For a probe=32 vector query that fires
@@ -127,6 +127,13 @@ impl Store for LocalMmapStore {
         // disk on a cold cache, but that fault happens in the
         // *scorer*, not here, and the OS handles it without
         // blocking the tokio worker for long enough to matter.
+        //
+        // Caveat: `LocalMmapStore` is for local FS only. If a caller
+        // points it at a network filesystem (NFS, mountpoint-s3,
+        // FUSE) the open + mmap syscall can stall arbitrarily.
+        // Don't wrap a slow remote mount in this store — use the
+        // `ObjectStoreImpl` path (which keeps its own async
+        // semantics) instead.
         let path = self.safe_path(key)?;
         match mmap_file(&path)? {
             Some(mmap) => Ok(Bytes::from_owner(MmapBuf(mmap))),
