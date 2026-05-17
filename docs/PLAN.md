@@ -1,5 +1,13 @@
 # agentic-search — PLAN (v3, Turbopuffer-style for M-doc S3 corpora)
 
+> **Status: historical planning record.** This document captures the
+> milestones (M0…M6) and pre-pivot thinking. The *shipped* surface
+> lives in [`ARCHITECTURE.md`](ARCHITECTURE.md) and the workspace
+> crates themselves. Crates listed here that are not in the current
+> workspace (`as-rerank`, `as-web`, `as-index`) were removed before
+> the v0.1.0 release for being unwired surface area; they may come
+> back later via a focused PR.
+
 ## v3 update (post-pivot)
 
 The agentic loop (grep + tree-sitter + parallel fan-out + cache) is what

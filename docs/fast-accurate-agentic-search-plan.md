@@ -3,6 +3,12 @@
 **Generated**: 2026-05-17  
 **Estimated Complexity**: High
 
+> **Status: historical planning record.** Captures pre-implementation
+> design thinking. See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the
+> shipped surface. Crate names below that no longer exist
+> (`as-rerank`, `as-web`, `as-index`) were dropped before v0.1.0 as
+> unwired surface area.
+
 ## Overview
 
 Make `agentic-search` the fastest and most accurate backend for agent file/search tools by treating it as an agent tool system first, not only a search engine. The default path should stay code-agent optimized: linked ripgrep, AST spans, S3/object-store awareness, cache, and server-side fan-out. Optional indexed stages should be enabled only when they improve a measured workload.
