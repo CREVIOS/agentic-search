@@ -8,7 +8,22 @@ use crate::{SourceStage, Span, SpanKind};
 use as_core::{Error, Hit, Result};
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::{Searcher, Sink, SinkMatch};
+use sha2::{Digest, Sha256};
 use std::io;
+
+/// SHA-256 of the bytes grep ran against, prefixed `sha256:`. Stamped
+/// on every emitted Span so downstream stages (AST widening, RRF
+/// fusion, response provenance) can detect content drift between
+/// when grep ran and when they consumed the span.
+fn content_hash(bytes: &[u8]) -> String {
+    let mut h = Sha256::new();
+    h.update(bytes);
+    let out = h.finalize();
+    let mut s = String::with_capacity(64 + 7);
+    s.push_str("sha256:");
+    s.push_str(&hex::encode(out));
+    s
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct GrepOpts {
@@ -51,10 +66,15 @@ pub fn grep_bytes_spans(
         .map_err(|e| Error::Index(format!("bad regex: {e}")))?;
 
     let cap = opts.max_hits_per_file.unwrap_or(usize::MAX);
+    // Compute the file's content hash once and stamp every emitted
+    // span. Skip it when the search produces no hits (overhead is
+    // ~3-5 ms on a 1 MB file; not worth paying on empty results).
     let mut sink = SpanSink {
         uri,
         spans: Vec::new(),
         cap,
+        hash: None,
+        bytes,
     };
 
     Searcher::new()
@@ -68,6 +88,11 @@ struct SpanSink<'a> {
     uri: &'a str,
     spans: Vec<Span>,
     cap: usize,
+    /// Lazily computed sha256 of `bytes`. Filled on the first emitted
+    /// span and reused for the rest of the file so we never pay
+    /// sha256 cost when the regex doesn't match.
+    hash: Option<String>,
+    bytes: &'a [u8],
 }
 
 impl Sink for SpanSink<'_> {
@@ -83,6 +108,9 @@ impl Sink for SpanSink<'_> {
         let start = mat.absolute_byte_offset();
         let end = start.saturating_add(mat.bytes().len() as u64);
         let snippet = String::from_utf8_lossy(mat.bytes()).trim_end().to_string();
+        if self.hash.is_none() {
+            self.hash = Some(content_hash(self.bytes));
+        }
         self.spans.push(Span {
             uri: self.uri.to_string(),
             byte_range: start..end,
@@ -91,6 +119,7 @@ impl Sink for SpanSink<'_> {
             snippet: Some(snippet),
             score: 1.0,
             source_stage: Some(SourceStage::Grep),
+            content_hash: self.hash.clone(),
             ..Span::default()
         });
         Ok(self.spans.len() < self.cap)

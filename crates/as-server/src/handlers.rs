@@ -697,18 +697,34 @@ async fn widen_spans(
                 return Ok(Vec::new());
             }
             let bytes = fs.read(&uri).await?;
-            // Drift guard: grep emitted these spans against a
-            // possibly-older copy of the file. If the file shrank
-            // under us, span byte ranges may now point past EOF and
-            // widening would either parse garbage or feed tree-sitter
-            // invalid bytes. Drop any span whose range overshoots the
-            // current file length before sending the group through
-            // the parser. The remaining spans either survive intact
-            // or get widened correctly against fresh content.
+            // Drift guard. Two cases to defend against:
+            //
+            //  1. The file shrank under us. A span's byte_range can now
+            //     point past EOF; widening would feed tree-sitter
+            //     invalid bytes. Drop those spans up front.
+            //  2. The file was rewritten to different content (same
+            //     length or longer). The byte_range still fits, but
+            //     widening it on the new bytes would attach AST kind
+            //     and symbol metadata from an unrelated function. Use
+            //     the content_hash grep stamped on each span (sha256
+            //     of the bytes grep ran against): if it doesn't match
+            //     the hash of the bytes we just read, drop the span
+            //     instead of widening with stale provenance. Spans
+            //     without a hash predate the stamping (pre-0.1.x) and
+            //     are widened best-effort.
             let file_len = bytes.len() as u64;
+            let current_hash = as_ast::content_hash(&bytes);
             let mut group: Vec<Span> = group
                 .into_iter()
-                .filter(|s| s.byte_range.end <= file_len)
+                .filter(|s| {
+                    if s.byte_range.end > file_len {
+                        return false;
+                    }
+                    // Drift: span carries a hash and it disagrees with
+                    // current bytes. Spans with no hash (pre-stamping
+                    // era or external producer) pass through.
+                    !matches!(&s.content_hash, Some(h) if h != &current_hash)
+                })
                 .collect();
             if group.is_empty() {
                 return Ok(Vec::new());
@@ -1062,5 +1078,40 @@ mod tests {
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].symbol.as_deref(), Some("beta"));
         assert_eq!(spans[0].line_range, [1, 2]);
+    }
+
+    /// Drift guard: a span whose `content_hash` disagrees with the
+    /// current file bytes must be dropped before AST widening, not
+    /// widened against unrelated content. Build a span manually
+    /// stamped with a fabricated hash and hand it to `widen_spans`;
+    /// the resulting set must be empty.
+    #[tokio::test]
+    async fn widen_spans_drops_drifted_content_hash() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("doc.py");
+        fs::write(&path, "def alpha():\n    return 1\n").unwrap();
+        let uri = format!("file://{}", dir.path().display());
+        let state = Arc::new(AppState::default());
+        let (fs_handle, _) = state.open_fs(&uri).expect("open_fs");
+
+        let stale_span = as_grep::Span {
+            uri: "doc.py".to_string(),
+            byte_range: 0..10,
+            line_range: [1, 1],
+            kind: as_grep::SpanKind::Line,
+            snippet: Some("def alpha".to_string()),
+            score: 1.0,
+            source_stage: Some(as_grep::SourceStage::Grep),
+            content_hash: Some("sha256:deadbeef-this-is-a-bogus-hash".to_string()),
+            ..as_grep::Span::default()
+        };
+
+        let widened = super::widen_spans(&fs_handle, &state.ast, vec![stale_span])
+            .await
+            .expect("widen_spans should not error");
+        assert!(
+            widened.is_empty(),
+            "span with stale content_hash must be dropped: {widened:?}"
+        );
     }
 }
