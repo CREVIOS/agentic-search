@@ -22,15 +22,6 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Doc {
-    pub id: String,
-    pub uri: String,
-    pub text: String,
-    #[serde(default)]
-    pub metadata: serde_json::Value,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Hit {
     pub id: String,
     pub uri: String,
@@ -39,28 +30,6 @@ pub struct Hit {
     pub snippet: Option<String>,
     #[serde(default)]
     pub metadata: serde_json::Value,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-pub struct Query {
-    pub text: String,
-    #[serde(default)]
-    pub k: Option<usize>,
-    #[serde(default)]
-    pub filter: Option<serde_json::Value>,
-    #[serde(default)]
-    pub mode: QueryMode,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum QueryMode {
-    #[default]
-    Hybrid,
-    Lexical,
-    Vector,
-    Web,
-    Grep,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
