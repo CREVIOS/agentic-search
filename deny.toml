@@ -15,6 +15,12 @@ ignore = [
     # AES overflow panic — affects only servers that enable overflow
     # checks; reqwest/rustls chain pulls it. Watch for upstream patch.
     "RUSTSEC-2025-0009",
+    # Transitive deps of the fastembed embedding stack (hf-hub /
+    # tokenizers). Unmaintained, not exploitable; only path is
+    # progress bar code (`number_prefix` ← `indicatif`) and the
+    # tokenizer macro_rules helper (`paste` ← `tokenizers`).
+    "RUSTSEC-2024-0436", # paste — via fastembed/tokenizers
+    "RUSTSEC-2025-0119", # number_prefix — via fastembed/hf-hub/indicatif
 ]
 
 [licenses]
