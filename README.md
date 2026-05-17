@@ -233,6 +233,22 @@ Crate-level breakdown in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 - **Production security defaults.** Server binds `127.0.0.1` unless `--allow-public`. Path-escape rejection on every `file://` read. CI runs `cargo-deny`, `gitleaks`, `pip-audit` (5 Python adapters), `pnpm audit`, `govulncheck`.
 - **One binary, every agent.** MCP stdio + REST + Python (×5 adapters) + Node + Go SDKs + Docker image on GHCR. Wire-compatible with Claude Code, Cursor, Cline, Claude Desktop, OpenAI Agents SDK, LangChain, CrewAI, DeepAgents.
 
+## Working examples (real S3, real agents)
+
+Four end-to-end runs land in `examples/`, all against a 4 MB
+markdown corpus on a **local S3-compatible bucket** (RustFS):
+
+| Example | Language | Surface | Live transcript |
+|---|---|---|---|
+| Claude Agent SDK | Python | MCP stdio | [transcript](examples/transcripts/claude_agent_sdk_run.md) |
+| DeepAgents | Python | REST | [transcript](examples/transcripts/deepagents_run.md) |
+| `@agentic-search/sdk` | TypeScript | REST | [transcript](examples/transcripts/node_and_go_run.md) |
+| `agenticsearch` Go SDK | Go | REST | [transcript](examples/transcripts/node_and_go_run.md) |
+
+Every run signs SigV4 requests against `http://localhost:19000`
+(swap the AWS env for real AWS keys and the same binary talks to
+real S3). Full setup + security model in [`examples/README.md`](examples/README.md).
+
 ## Status
 
 `v0.1.0` — first public release.
