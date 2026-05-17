@@ -8,7 +8,6 @@ members = [
     "crates/as-ast",
     "crates/as-cache",
     "crates/as-embed",
-    "crates/as-index",
     "crates/as-vec",
     "crates/as-web",
     "crates/as-rerank",
@@ -49,7 +48,6 @@ object_store = { version = "0.13", features = ["aws", "gcp"] }
 grep-searcher = "0.1"
 grep-regex = "0.1"
 grep-matcher = "0.1"
-tantivy = "0.22"
 
 # Vector
 # usearch via FFI bindings; fallback hnsw_rs (pure Rust)
@@ -77,7 +75,6 @@ as-grep = { path = "crates/as-grep" }
 as-ast = { path = "crates/as-ast" }
 as-cache = { path = "crates/as-cache" }
 as-embed = { path = "crates/as-embed" }
-as-index = { path = "crates/as-index" }
 as-vec = { path = "crates/as-vec" }
 as-web = { path = "crates/as-web" }
 as-rerank = { path = "crates/as-rerank" }

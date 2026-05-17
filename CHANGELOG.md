@@ -10,9 +10,9 @@ First public release. Core agent-loop search path is production-ready.
 
 ### Added
 
-- **Rust workspace** (14 crates): `as-core`, `as-store`, `as-fs`, `as-grep`,
-  `as-ast`, `as-cache`, `as-embed`, `as-index`, `as-vec`, `as-web`,
-  `as-rerank`, `as-plan`, `as-server`, `as-cli`, plus `bench/`.
+- **Rust workspace** (13 crates): `as-core`, `as-store`, `as-fs`, `as-grep`,
+  `as-ast`, `as-cache`, `as-embed`, `as-vec`, `as-web`, `as-rerank`,
+  `as-plan`, `as-server`, `as-cli`, plus `bench/`.
 - **CLI** (`agentic-search`) with `ls / glob / read / grep / find / serve /
   index-manifest / index / query` verbs.
 - **MCP stdio server** following JSON-RPC 2.0 (protocol 2025-11-25) with

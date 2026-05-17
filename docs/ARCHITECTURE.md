@@ -15,8 +15,7 @@ in each layer.
 5. **Search stages**:
    - `as-grep` — `grep-searcher` linked in; range-coalesces S3 reads.
    - `as-ast` — tree-sitter spans (function/class/method).
-   - `as-index` — optional tantivy BM25 for unstructured docs.
-   - `as-vec` — opt-in fastembed + HNSW for unstructured corpora.
+   - `as-vec` — opt-in fastembed + centroid index for unstructured corpora.
    - `as-web` — Exa default, Brave / Tavily fallback.
 6. **Cache** — `as-cache`: memory LRU in front of NVMe LRU in front of the
    object store. Keys: `(store, key, range)` for file ranges,
@@ -33,7 +32,7 @@ in each layer.
 - **No subprocess for grep.** `grep-searcher` is linked in.
 - **No double allocation on read.** Bytes flow `s3 → Bytes → searcher
   slice`. No string copy unless the caller asks for a snippet.
-- **Async everywhere except the CPU-bound inner loop.** Tantivy, ripgrep and
+- **Async everywhere except the CPU-bound inner loop.** Ripgrep and
   tree-sitter run on a Rayon pool; the async layer bridges with
   `spawn_blocking`.
 - **Manifests co-locate with data.** A small `_manifest.parquet` per prefix
@@ -69,12 +68,12 @@ The cache has three explicit layers:
 
 1. **Memory LRU** — bounded by config; holds the hottest spans and manifest
    slices.
-2. **NVMe LRU** — `foyer` or hand-rolled; bounded by disk budget; holds
-   range bytes, AST trees, BM25 segments.
+2. **NVMe LRU** — bounded by disk budget; holds range bytes, AST trees,
+   and centroid-cluster blobs. Sweep is mtime-LRU with touch-on-hit.
 3. **Object store** — source of truth; everything is reproducible from here.
 
-The object store also holds *indexed* artifacts (manifests, tantivy
-segments, HNSW shards) when the user has run `agentic-search index`. The
+The object store also holds *indexed* artifacts (prefix manifests,
+centroid index files) when the user has run `agentic-search index`. The
 index lives next to the data; nothing is ever stranded in a local cache.
 
 ## Realtime / freshness
@@ -82,7 +81,7 @@ index lives next to the data; nothing is ever stranded in a local cache.
 For raw `grep`/`glob` over a prefix, freshness is trivially S3-fresh — we
 list-on-demand and the cache invalidates on `ETag` change.
 
-For indexed stages (`as-index`, `as-vec`):
+For indexed stages (`as-vec`):
 
 - Writes append to a WAL and to an in-memory delta segment.
 - The delta segment is queried *alongside* the cold segments.

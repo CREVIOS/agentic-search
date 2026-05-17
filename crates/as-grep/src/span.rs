@@ -36,8 +36,6 @@ pub enum SourceStage {
     Ast,
     /// Centroid vector ANN.
     Vector,
-    /// Optional BM25 inverted index (off the default path).
-    Lexical,
     /// Web search adapter (Brave / Tavily / Exa).
     Web,
     /// Fused result from `as-plan::rrf`.
@@ -59,7 +57,7 @@ pub struct Span {
     // --- Optional metadata (added in v3.1). All fields default to None /
     //     empty so older serialised spans keep deserialising and older
     //     clients keep parsing the new shape. ---
-    /// Per-signal scores (e.g. `{ "bm25": 0.81, "cosine": 0.74 }`)
+    /// Per-signal scores (e.g. `{ "cosine": 0.74, "literal_match": 1.0 }`)
     /// gathered before fusion. Useful for explainability + reranking.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rank_signals: Option<RankSignals>,
@@ -86,9 +84,6 @@ pub struct RankSignals {
     /// produced this span.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cosine: Option<f32>,
-    /// BM25 score (if the optional BM25 stage ran).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bm25: Option<f32>,
     /// 1.0 if a literal token in the query matched the snippet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub literal_match: Option<f32>,
@@ -154,11 +149,11 @@ mod tests {
             truncated: true,
         };
         let v = serde_json::to_value(&s).unwrap();
-        // The truncated=true field must be present; bm25/term_overlap
-        // omitted because they were None.
+        // The truncated=true field must be present; unset rank signals
+        // are omitted because they were None.
         assert_eq!(v["truncated"], serde_json::json!(true));
         let cosine = v["rank_signals"]["cosine"].as_f64().unwrap();
         assert!((cosine - 0.74).abs() < 1e-3, "got cosine={cosine}");
-        assert!(v["rank_signals"].get("bm25").is_none());
+        assert!(v["rank_signals"].get("term_overlap").is_none());
     }
 }

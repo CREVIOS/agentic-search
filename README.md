@@ -248,7 +248,6 @@ Crate-level breakdown in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | `as-cache`    | Tiered cache: memory LRU → NVMe LRU with mtime sweep      |
 | `as-embed`    | fastembed-rs (ONNX, BGE-small-en)                         |
 | `as-vec`      | Centroid (clustered) vector index on object storage       |
-| `as-index`    | Index-building orchestration                              |
 | `as-web`      | Web tool (Exa default, Brave/Tavily fallback)             |
 | `as-rerank`   | Optional reranker stage                                   |
 | `as-plan`     | Planner: parallel fan-out, stage budgets, RRF fusion      |
