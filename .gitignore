@@ -54,3 +54,9 @@ bench/data/
 
 # Claude Code runtime
 .claude/
+
+# Examples runtime artifacts
+examples/corpus/data/
+examples/transcripts/*.jsonl
+.venv-examples/
+scripts/rustfs-env.sh
