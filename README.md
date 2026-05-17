@@ -320,7 +320,9 @@ python bench/macro/run.py --runs 5 --server
 ```
 
 CI gates: clippy `-D warnings`, criterion regression, `cargo-deny`,
-`gitleaks`. PRs that change a hot path must include a bench delta.
+`gitleaks`, `pip-audit` (5 Python adapters), `pnpm audit` (Node),
+`govulncheck` (Go). PRs that change a hot path must include a bench
+delta. Full contributor guide in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
