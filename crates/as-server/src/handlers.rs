@@ -3,7 +3,7 @@
 //! bridge in `mcp_stdio` adapts these same JSON shapes for stdio clients.
 
 use crate::AppState;
-use as_ast::{widen_with_cache, SpanCache};
+use as_ast::{widen_with_cache_cancellable, SpanCache};
 use as_fs::Fs;
 use as_grep::{GrepOpts, ParallelGrep, ParallelOpts, Span};
 use axum::{extract::State, http::StatusCode, Json};
@@ -602,24 +602,45 @@ async fn widen_spans(
     spans: Vec<Span>,
 ) -> anyhow::Result<Vec<Span>> {
     use std::collections::{BTreeMap, HashSet};
+    use std::sync::atomic::{AtomicBool, Ordering};
     let mut by_uri: BTreeMap<String, Vec<Span>> = BTreeMap::new();
     for s in spans {
         by_uri.entry(s.uri.clone()).or_default().push(s);
     }
-    // `JoinSet` drops abort the spawned tasks. The caller can wrap this
-    // future in a timeout and the AST reads + tree-sitter walks stop
-    // immediately instead of detaching into background CPU/IO leaks.
+    // `JoinSet` drops abort spawned *async* tasks, but a `spawn_blocking`
+    // job already running on the blocking pool keeps executing after
+    // its async wrapper is dropped. The shared `cancelled` flag is
+    // raised by `CancelGuard::drop` when this future is cancelled
+    // (timeout, client disconnect, …); each `widen_with_cache_cancellable`
+    // checks it between span iterations and exits early.
+    struct CancelGuard(Arc<AtomicBool>);
+    impl Drop for CancelGuard {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let _guard = CancelGuard(cancelled.clone());
+
     let mut pending: tokio::task::JoinSet<anyhow::Result<Vec<Span>>> = tokio::task::JoinSet::new();
     let mut out: Vec<Span> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     for (uri, group) in by_uri {
         let fs = fs.clone();
         let cache = ast_cache.clone();
+        let cancelled = cancelled.clone();
         pending.spawn(async move {
+            // Cheap fast-path: don't even read the file if we were
+            // already cancelled before this future got scheduled.
+            if cancelled.load(Ordering::Acquire) {
+                return Ok(Vec::new());
+            }
             let bytes = fs.read(&uri).await?;
             tokio::task::spawn_blocking(move || {
                 let mut group = group;
-                widen_with_cache(&cache, &bytes, &mut group)?;
+                widen_with_cache_cancellable(&cache, &bytes, &mut group, &|| {
+                    cancelled.load(Ordering::Acquire)
+                })?;
                 Ok::<_, anyhow::Error>(group)
             })
             .await
@@ -754,13 +775,16 @@ fn rank_search_spans(mut spans: Vec<Span>, query: &str, terms: &[String], k: usi
             .unwrap_or(0);
         let phrase_boost = (!phrase.is_empty() && haystack.contains(&phrase)) as u8 as f32;
         let lexical_boost = term_hits as f32 + (symbol_hits as f32 * 0.75) + phrase_boost;
-        // Stash for explainability + record the boost as a tiebreaker
-        // in the existing `score` while preserving the RRF-fused base
-        // by adding (not replacing).
+        // RRF scores live in the ~[0.01, 0.05] range (1/(60+rank)),
+        // so a +0.05 boost per term-hit overpowers the fused signal
+        // and turns this into a lexical-only ranker. Use 0.001 — small
+        // enough that ten lexical hits still trail one extra
+        // multi-probe agreement, but non-zero so it breaks ties.
+        const LEXICAL_BOOST_WEIGHT: f32 = 0.001;
         let signals = span.rank_signals.get_or_insert_with(Default::default);
         signals.literal_match = Some(phrase_boost);
         signals.term_overlap = Some(term_hits as u16);
-        span.score += lexical_boost * 0.05;
+        span.score += lexical_boost * LEXICAL_BOOST_WEIGHT;
     }
     spans.sort_by(|a, b| {
         b.score

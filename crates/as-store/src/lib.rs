@@ -93,6 +93,18 @@ pub fn parse_uri(uri: &str) -> Result<ParsedUri> {
 /// Returns `(store, key_prefix)` where `key_prefix` is the portion of the
 /// URI inside the bucket / root. The caller passes that prefix back to
 /// `Store::list`, `Store::get`, etc.
+fn split_to_parent(abs: &std::path::Path) -> (PathBuf, String) {
+    let parent = abs
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("/"));
+    let name = abs
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    (parent, name)
+}
+
 pub fn open(uri: &str) -> Result<(ArcStore, String)> {
     let parsed = parse_uri(uri)?;
     match parsed.scheme.as_str() {
@@ -109,20 +121,26 @@ pub fn open(uri: &str) -> Result<(ArcStore, String)> {
             // or a single file. If it's a file we mount the *parent*
             // as the store root and return the basename as the key, so
             // `/read file:///tmp/a.txt` works the same shape as
-            // `/read s3://bucket/key`.
+            // `/read s3://bucket/key`. For a non-existent path that
+            // *looks* file-shaped (parent exists, basename has an
+            // extension), do the same — that's a "read this file"
+            // URI, not "create a directory here".
             let (root, key) = match std::fs::metadata(&abs) {
-                Ok(meta) if meta.is_file() => {
-                    let parent = abs
-                        .parent()
-                        .map(|p| p.to_path_buf())
-                        .unwrap_or_else(|| PathBuf::from("/"));
-                    let name = abs
+                Ok(meta) if meta.is_file() => split_to_parent(&abs),
+                Ok(_) => (abs, String::new()),
+                Err(_) => {
+                    let parent_ok = abs.parent().map(|p| p.is_dir()).unwrap_or(false);
+                    let looks_like_file = abs
                         .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    (parent, name)
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.contains('.'))
+                        .unwrap_or(false);
+                    if parent_ok && looks_like_file {
+                        split_to_parent(&abs)
+                    } else {
+                        (abs, String::new())
+                    }
                 }
-                _ => (abs, String::new()),
             };
             let store = LocalMmapStore::new(&root)?;
             Ok((Arc::new(store), key))

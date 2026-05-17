@@ -26,8 +26,19 @@ pub struct LocalMmapStore {
 impl LocalMmapStore {
     pub fn new(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
-        std::fs::create_dir_all(&root).map_err(Error::Io)?;
-        let canon = std::fs::canonicalize(&root).map_err(Error::Io)?;
+        // Only create the directory if it doesn't exist *and* the
+        // caller chose a path-like location. A read-shaped URI (e.g.
+        // `file:///tmp/missing.txt`) must not silently mkdir its
+        // parent or basename — that's a side-effect on the read path.
+        let canon = match std::fs::canonicalize(&root) {
+            Ok(c) => c,
+            Err(_) => {
+                // Path doesn't exist yet — likely a future-write
+                // target. Create it and canonicalize again.
+                std::fs::create_dir_all(&root).map_err(Error::Io)?;
+                std::fs::canonicalize(&root).map_err(Error::Io)?
+            }
+        };
         Ok(Self { root: canon })
     }
 

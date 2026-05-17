@@ -43,38 +43,38 @@ impl AppState {
     }
 
     /// Open a URI. The returned `Fs` shares a single tier-wrapped store
-    /// with every other call that targets the same `(scheme, authority)`.
-    /// For `file://` we key on the full root path so two different local
-    /// roots stay independent.
+    /// with every other call that targets the same `(scheme, authority)`
+    /// for object stores; `file://` always opens fresh because
+    /// `LocalMmapStore::new` is cheap and the URI may resolve to a
+    /// single file (parent + basename) or a directory root.
     pub fn open_fs(&self, uri: &str) -> Result<(Arc<Fs>, String)> {
         let parsed = as_store::parse_uri(uri)?;
-        let cache_key = match parsed.scheme.as_str() {
-            "file" => format!("file://{}", parsed.key),
-            other => format!("{other}://{}", parsed.authority.as_deref().unwrap_or("")),
-        };
-        // Open the upstream store (or reuse a cached one).
+        if parsed.scheme == "file" {
+            // `as_store::open` already handles file-vs-dir detection
+            // and returns the correct (root, key) split. Forwarding it
+            // verbatim is the only way `/read file:///tmp/x.txt` and
+            // `/grep file:///tmp/` both work.
+            let (store, prefix) = as_store::open(uri)?;
+            return Ok((Arc::new(Fs::new(store)), prefix));
+        }
+        // Object stores: cache per (scheme, authority) so the tier
+        // cache state survives across requests.
+        let cache_key = format!(
+            "{}://{}",
+            parsed.scheme,
+            parsed.authority.as_deref().unwrap_or("")
+        );
         let store = {
             let mut map = self.stores.lock();
             if let Some(existing) = map.get(&cache_key) {
                 existing.clone()
             } else {
-                let (raw, _root_prefix) = as_store::open(uri)?;
-                let wrapped = if parsed.scheme == "file" {
-                    raw
-                } else {
-                    as_cache::wrap(raw, self.tier.clone())
-                };
+                let (raw, _) = as_store::open(uri)?;
+                let wrapped = as_cache::wrap(raw, self.tier.clone());
                 map.insert(cache_key, wrapped.clone());
                 wrapped
             }
         };
-        // The in-store key prefix for *this* call comes from the parsed
-        // URI (S3/R2/GCS: object key under the bucket; file: empty
-        // because the LocalFileSystem store is already rooted).
-        let prefix = match parsed.scheme.as_str() {
-            "file" => String::new(),
-            _ => parsed.key,
-        };
-        Ok((Arc::new(Fs::new(store)), prefix))
+        Ok((Arc::new(Fs::new(store)), parsed.key))
     }
 }

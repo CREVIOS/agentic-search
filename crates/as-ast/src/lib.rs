@@ -346,6 +346,20 @@ pub fn widen_many(bytes: &[u8], spans: &mut [Span]) -> Result<()> {
 /// process lifetime, so back-to-back search calls over the same prefix
 /// pay parse cost only on cold files.
 pub fn widen_with_cache(cache: &SpanCache, bytes: &[u8], spans: &mut [Span]) -> Result<()> {
+    widen_with_cache_cancellable(cache, bytes, spans, &|| false)
+}
+
+/// Same as `widen_with_cache` but checks `cancelled()` between every
+/// span. Designed for `spawn_blocking` callers that want cooperative
+/// cancellation: dropping the parent future cannot abort an in-flight
+/// blocking task, but the blocking task can ask "should I keep going?"
+/// at each iteration and bail early.
+pub fn widen_with_cache_cancellable(
+    cache: &SpanCache,
+    bytes: &[u8],
+    spans: &mut [Span],
+    cancelled: &dyn Fn() -> bool,
+) -> Result<()> {
     let Some(first) = spans.first() else {
         return Ok(());
     };
@@ -355,6 +369,9 @@ pub fn widen_with_cache(cache: &SpanCache, bytes: &[u8], spans: &mut [Span]) -> 
         None => return Ok(()),
     };
     for span in spans.iter_mut() {
+        if cancelled() {
+            return Ok(());
+        }
         let probe = first_non_whitespace(
             bytes,
             span.byte_range.start as usize,
