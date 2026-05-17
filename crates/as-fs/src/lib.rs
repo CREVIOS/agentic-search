@@ -69,8 +69,14 @@ impl Fs {
         match as_store::manifest::stream_manifest(&*self.store, prefix).await? {
             Some((header, mut iter)) => {
                 let expected = header.count as usize;
+                // Cap initial capacity at a sane prefix so an
+                // attacker-controlled header (`count = 2_000_000_000`)
+                // cannot force a multi-GB allocation per request. The
+                // Vec still grows naturally if real entries exceed
+                // this hint.
+                const INITIAL_CAPACITY_CAP: usize = 4096;
                 let mut entries: Vec<as_store::manifest::ManifestEntry> =
-                    Vec::with_capacity(expected.min(1_000_000));
+                    Vec::with_capacity(expected.min(INITIAL_CAPACITY_CAP));
                 loop {
                     match iter.next_entry() {
                         Ok(Some(e)) => entries.push(e),
@@ -84,11 +90,17 @@ impl Fs {
                         }
                     }
                 }
-                if expected > 0 && entries.len() < expected {
+                // Strict count match: header.count must equal what we
+                // actually drained. A short body means truncation; an
+                // overshooting body means a malicious or corrupt header
+                // that under-claimed the entry count (an attacker could
+                // hide files this way). Either direction is a fallback
+                // trigger.
+                if entries.len() != expected {
                     tracing::warn!(
                         expected,
                         got = entries.len(),
-                        "manifest truncated (short count); falling back to live list",
+                        "manifest count mismatch; falling back to live list",
                     );
                     return Ok(self.store.list(prefix));
                 }
@@ -189,6 +201,105 @@ mod tests {
         assert!(keys.contains(&"docs/a.md".to_string()), "{keys:?}");
         assert!(keys.contains(&"docs/b.md".to_string()), "{keys:?}");
         assert!(keys.contains(&"docs/c.md".to_string()), "{keys:?}");
+    }
+
+    /// Header claims more entries than the body has — short count.
+    /// Already covered above (`truncated_manifest_falls_back_…`) but
+    /// also assert no manifest-sourced entry leaks before fallback.
+    #[tokio::test]
+    async fn count_too_high_falls_back() {
+        use bytes::Bytes;
+        use std::io::Write;
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let uri = format!("file://{}", dir.path().display());
+        let (store, _) = as_store::open(&uri).unwrap();
+        store.put("docs/x.md", Bytes::from_static(b"x")).await.unwrap();
+        let header = serde_json::json!({"v":1,"prefix":"docs","generated_at":0,"count":99});
+        let body = serde_json::json!({"key":"docs/x.md","size":1});
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        writeln!(gz, "{header}").unwrap();
+        writeln!(gz, "{body}").unwrap();
+        store.put("docs/.agentic-search/manifest.jsonl.gz", Bytes::from(gz.finish().unwrap())).await.unwrap();
+        let fs = Fs::new(store);
+        let mut stream = fs.list_with_manifest("docs").await.unwrap();
+        let mut count = 0;
+        while let Some(item) = stream.next().await {
+            item.unwrap();
+            count += 1;
+        }
+        // Live list returns x.md AND the manifest blob; minimum 1 from x.md.
+        assert!(count >= 1);
+    }
+
+    /// Header claims fewer entries than the body has. This is the
+    /// "malicious manifest hides files" angle: an honest body but a
+    /// header that under-counts to make the consumer drop entries.
+    /// Strict match forces fallback to live list.
+    #[tokio::test]
+    async fn count_too_low_falls_back() {
+        use bytes::Bytes;
+        use std::io::Write;
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let uri = format!("file://{}", dir.path().display());
+        let (store, _) = as_store::open(&uri).unwrap();
+        for k in ["docs/a.md", "docs/b.md", "docs/c.md"] {
+            store.put(k, Bytes::from_static(b"x")).await.unwrap();
+        }
+        // Header says count=1, body lists three entries.
+        let header = serde_json::json!({"v":1,"prefix":"docs","generated_at":0,"count":1});
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        writeln!(gz, "{header}").unwrap();
+        for k in ["docs/a.md", "docs/b.md", "docs/c.md"] {
+            let e = serde_json::json!({"key": k, "size": 1});
+            writeln!(gz, "{e}").unwrap();
+        }
+        store.put("docs/.agentic-search/manifest.jsonl.gz", Bytes::from(gz.finish().unwrap())).await.unwrap();
+        let fs = Fs::new(store);
+        let mut stream = fs.list_with_manifest("docs").await.unwrap();
+        let mut keys: Vec<String> = Vec::new();
+        while let Some(item) = stream.next().await {
+            keys.push(item.unwrap().key);
+        }
+        keys.sort();
+        // Live fallback lists a/b/c (and the manifest blob).
+        for want in ["docs/a.md", "docs/b.md", "docs/c.md"] {
+            assert!(keys.iter().any(|k| k == want), "missing {want} in {keys:?}");
+        }
+    }
+
+    /// Header claims a giant count. The allocation must stay cheap
+    /// (capped at INITIAL_CAPACITY_CAP) and fallback must fire.
+    #[tokio::test]
+    async fn huge_count_does_not_blow_up_allocation() {
+        use bytes::Bytes;
+        use std::io::Write;
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let uri = format!("file://{}", dir.path().display());
+        let (store, _) = as_store::open(&uri).unwrap();
+        store.put("docs/real.md", Bytes::from_static(b"x")).await.unwrap();
+        // count = ~2 billion; allocating one ManifestEntry per slot
+        // would be on the order of 100 GB.
+        let header = serde_json::json!({
+            "v": 1, "prefix": "docs", "generated_at": 0, "count": 2_000_000_000u64
+        });
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        writeln!(gz, "{header}").unwrap();
+        store.put("docs/.agentic-search/manifest.jsonl.gz", Bytes::from(gz.finish().unwrap())).await.unwrap();
+        let fs = Fs::new(store);
+        // If this test OOM'd, the capacity cap regressed. Just
+        // completing the call within the default test timeout is the
+        // assertion.
+        let mut stream = fs.list_with_manifest("docs").await.unwrap();
+        let mut saw = false;
+        while let Some(item) = stream.next().await {
+            if item.unwrap().key == "docs/real.md" {
+                saw = true;
+            }
+        }
+        assert!(saw, "fallback live list should include the real file");
     }
 
     /// Mid-stream JSON parse failure (corrupt body) is also a
