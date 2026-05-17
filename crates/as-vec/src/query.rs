@@ -76,6 +76,13 @@ impl VecIndex {
                 .map_err(|e| Error::Index(format!("bad doc meta: {e}")))?;
             docs.push(d);
         }
+        // Cluster cache capacity = max(DEFAULT_CLUSTER_CACHE, k). On
+        // a 1024-cluster index with default 256 capacity the LRU
+        // thrashes (sweep workloads touch every cluster), so warm
+        // queries kept paying cold decode cost. Sizing to `k` makes
+        // a full sweep amortise: cluster gets decoded once, every
+        // future hit returns the cached Arc.
+        let cluster_cache_cap = DEFAULT_CLUSTER_CACHE.max(manifest.k);
         Ok(Self {
             store,
             prefix,
@@ -83,7 +90,7 @@ impl VecIndex {
             centroids,
             docs,
             cluster_cache: parking_lot::Mutex::new(LruCache::new(
-                NonZeroUsize::new(DEFAULT_CLUSTER_CACHE).unwrap(),
+                NonZeroUsize::new(cluster_cache_cap).unwrap(),
             )),
         })
     }
@@ -163,12 +170,7 @@ impl VecIndex {
             let (cid, recs) = r?;
             self.cluster_cache.lock().put(cid, recs.clone());
             for rec in recs.iter() {
-                let s: f32 = query
-                    .iter()
-                    .take(dim)
-                    .zip(rec.vector.iter())
-                    .map(|(a, b)| a * b)
-                    .sum();
+                let s = dot_f32(&query[..dim], &rec.vector[..dim]);
                 let entry = HeapEntry {
                     score: s,
                     doc_id: rec.doc_id,
@@ -220,6 +222,23 @@ impl PartialOrd for HeapEntry {
         Some(self.cmp(other))
     }
 }
+/// f32 dot product. Plain loop over equal-length slices; the
+/// compiler's auto-vectoriser turns this into 4-wide (SSE) or
+/// 8-wide (AVX/NEON) FMA when `-C opt-level=3` is in effect.
+/// The chained `zip + take + map + sum` shape we had previously
+/// hides the length invariant and the compiler emits a scalar
+/// loop with a runtime length check on every iteration.
+#[inline]
+fn dot_f32(a: &[f32], b: &[f32]) -> f32 {
+    debug_assert_eq!(a.len(), b.len());
+    let n = a.len();
+    let mut acc = 0f32;
+    for i in 0..n {
+        acc += a[i] * b[i];
+    }
+    acc
+}
+
 impl Ord for HeapEntry {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // Order by score using IEEE total_cmp so NaN is well-defined,

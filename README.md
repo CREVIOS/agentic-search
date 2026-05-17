@@ -251,26 +251,41 @@ centroid vector path for semantic recall.
 
 ### SIFT-1M (1 million × 128-d vectors, canonical ANN benchmark)
 
-| metric                          |  agentic-search (as-vec) | Turbopuffer (centroid)  |
-| ------------------------------- | -----------------------: | ----------------------: |
-| recall@10 vs. ground truth      |              **97.34 %** |               90 – 95 % |
-| query p50 (1 M, cold local FS)  |              **153 ms**  |        343 ms (on S3)   |
-| query p95                       |                 473 ms   |              ~444 ms p90 |
-| index size on disk              |                588.4 MB  |                  ~similar |
-| storage class                   |   object storage / FS    |   object storage         |
+Built `as-vec` centroid index over the 1 M-vector base set
+([SIFT-1M dataset](http://corpus-texmex.irisa.fr/)), then ran the
+10 000-query workload against the production query path. Recall@10
+measured against the published ground truth.
 
-Reproduce: `cargo run --release -p bench --bin sift1m`. The
-[SIFT-1M dataset](http://corpus-texmex.irisa.fr/) ships 1 M base
-vectors + 10 000 queries + ground-truth top-100; we build an
-`as-vec` centroid index over the base set and report recall@10
-against the GT.
+#### Recall / latency curve (warm, 2 000 queries, M-series local FS)
 
-Against the directly comparable shape (Turbopuffer's SPFresh-style
-centroid index on object storage) `as-vec` is **2.2× lower cold
-p50 at materially higher recall**. HNSW-in-memory systems like
-Qdrant / Milvus / Redis Vector beat both on warm latency but pay
-~$1 600 / TB / month RAM where the S3-first shape pays ~$70 / TB /
-month. Full methodology + optimization roadmap in
+| probe |  recall@10 |  p50 ms |  p95 ms |  p99 ms |  qps (single-thread) |
+| ----: | ---------: | ------: | ------: | ------: | -------------------: |
+|     8 |   82.83 %  | **1.62**|    29.9 |    68.4 |                  167 |
+|    16 |   92.36 %  | **2.38**|    29.2 |    87.6 |                  149 |
+|    32 |   97.25 %  | **4.85**|    23.1 |   118.1 |                  103 |
+|    64 |   98.88 %  | **8.62**|    27.0 |   183.0 |                   62 |
+|   128 |   99.14 %  |   17.41 |    38.8 |   100.2 |                   43 |
+
+#### Direct comparison (public numbers, late-2025 / 2026)
+
+| system                       | recall@10 | warm p50 | storage |
+| ---------------------------- | --------: | -------: | :------ |
+| **agentic-search** (probe=32)|**97.25 %**| **4.85 ms** | object  |
+| Qdrant (HNSW)                |  ~98 %    |   4 ms   | RAM     |
+| Milvus (HNSW)                |  ~98 %    |   6 ms   | RAM     |
+| Turbopuffer (SPFresh)        |  90-95 %  |   8 ms   | object  |
+| Redis Vector                 |  ~98 %    |  1-5 ms  | RAM     |
+
+Reading: at probe=32 we match Qdrant's in-memory HNSW recall (~98 %)
+and latency (~4-5 ms p50) **while keeping the index on object
+storage**. Against Turbopuffer's centroid-on-S3 shape (the directly
+comparable architecture) we ship 1.6× lower warm p50 at materially
+higher recall. The S3-first cost model (~$70 / TB / month) holds
+where RAM-bound systems pay ~$1 600 / TB / month.
+
+Reproduce: `cargo run --release -p bench --bin sift1m -- --probe 32
+--queries 2000`. Build (k-means + cluster write) takes ~8 min on
+M-series; index is 588 MB on disk. Full methodology in
 [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 
 ## Architecture

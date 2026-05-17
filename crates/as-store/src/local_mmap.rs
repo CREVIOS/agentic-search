@@ -115,28 +115,36 @@ fn mmap_file(path: &Path) -> Result<Option<Mmap>> {
 #[async_trait]
 impl Store for LocalMmapStore {
     async fn get(&self, key: &str) -> Result<Bytes> {
+        // Inline mmap. spawn_blocking adds ~50-100 µs of scheduler
+        // round-trip per call; mmap itself is a single syscall that
+        // sets up a page-table mapping (~10 µs on macOS / Linux),
+        // not blocking I/O. For a probe=32 vector query that fires
+        // 32 store.get calls in parallel the scheduler overhead
+        // dominated wall time — bench measured ~5 ms/cluster on
+        // local FS, of which only ~1 ms was real work.
+        //
+        // The first access to each mapped page still faults from
+        // disk on a cold cache, but that fault happens in the
+        // *scorer*, not here, and the OS handles it without
+        // blocking the tokio worker for long enough to matter.
         let path = self.safe_path(key)?;
-        tokio::task::spawn_blocking(move || match mmap_file(&path)? {
-            Some(mmap) => Ok::<_, Error>(Bytes::from_owner(MmapBuf(mmap))),
+        match mmap_file(&path)? {
+            Some(mmap) => Ok(Bytes::from_owner(MmapBuf(mmap))),
             None => Ok(Bytes::new()),
-        })
-        .await
-        .map_err(|e| Error::Other(format!("join: {e}")))?
+        }
     }
 
     async fn get_range(&self, key: &str, range: Range<u64>) -> Result<Bytes> {
         let path = self.safe_path(key)?;
-        tokio::task::spawn_blocking(move || match mmap_file(&path)? {
+        match mmap_file(&path)? {
             Some(mmap) => {
                 let end = (range.end as usize).min(mmap.len());
                 let start = (range.start as usize).min(end);
                 let bytes = Bytes::from_owner(MmapBuf(mmap));
-                Ok::<_, Error>(bytes.slice(start..end))
+                Ok(bytes.slice(start..end))
             }
             None => Ok(Bytes::new()),
-        })
-        .await
-        .map_err(|e| Error::Other(format!("join: {e}")))?
+        }
     }
 
     async fn put(&self, key: &str, data: Bytes) -> Result<()> {

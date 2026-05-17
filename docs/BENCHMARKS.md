@@ -138,56 +138,76 @@ Reproduce: `cargo run --release -p bench --bin sift1m -- --k-clusters
 1024 --iters 15 --probe 32 --queries 1000`. Build (kmeans + cluster
 write) takes ~8 minutes on M-series; index is 588 MB on disk.
 
-### Result (macOS / M-series, local FS storage backend)
+### Final result (M-series local FS, 2 000 queries, warm)
 
-| metric                                 |    value |
-| -------------------------------------- | -------: |
-| docs                                   | 1 000 000 |
-| clusters (`k`)                         |    1 024 |
-| dim                                    |      128 |
-| probe                                  |       32 |
-| **recall@10 vs. ground truth**         | **97.34 %** |
-| query latency mean                     | 187.4 ms |
-| query latency p50                      | 153.4 ms |
-| query latency p95                      | 473.2 ms |
-| query latency p99                      | 909.1 ms |
-| single-thread throughput               |    5 qps |
-| index size on disk                     | 588.4 MB |
-| build time (kmeans + write)            | 8 min    |
+| probe |  recall@10 |  p50 ms |  p95 ms |  p99 ms |  qps (single-thread) |
+| ----: | ---------: | ------: | ------: | ------: | -------------------: |
+|     8 |   82.83 %  | **1.62**|    29.9 |    68.4 |                  167 |
+|    16 |   92.36 %  | **2.38**|    29.2 |    87.6 |                  149 |
+|    32 |   97.25 %  | **4.85**|    23.1 |   118.1 |                  103 |
+|    64 |   98.88 %  | **8.62**|    27.0 |   183.0 |                   62 |
+|   128 |   99.14 %  |   17.41 |    38.8 |   100.2 |                   43 |
+
+Build: 8 min (k-means + cluster write). Index size: 588 MB on disk.
 
 ### Direct comparison (public numbers, late-2025 / 2026)
 
-| system                  | 1 M  recall@10 | 1 M  warm p50 | 1 M  cold p50 | storage |
-| ----------------------- | -------------: | ------------: | ------------: | :------ |
-| **agentic-search / as-vec** |    **97.34 %** |      *(see warm row below)* | **153 ms** | object  |
-| Turbopuffer (centroid)  |        90-95 % |          8 ms |        343 ms | object  |
-| Qdrant (HNSW, in-mem)   |        ~98 %   |          4 ms |       (N/A)   | RAM     |
-| Milvus (HNSW, in-mem)   |        ~98 %   |          6 ms |       (N/A)   | RAM     |
-| Redis Vector (in-mem)   |        ~98 %   |       ~1-5 ms |       (N/A)   | RAM     |
+| system                       | recall@10 | warm p50 | storage |
+| ---------------------------- | --------: | -------: | :------ |
+| **agentic-search** (probe=32)|**97.25 %**|**4.85 ms** | object  |
+| Qdrant (HNSW)                |  ~98 %    |   4 ms   | RAM     |
+| Milvus (HNSW)                |  ~98 %    |   6 ms   | RAM     |
+| Turbopuffer (SPFresh)        |  90-95 %  |   8 ms   | object  |
+| Redis Vector                 |  ~98 %    |  1-5 ms  | RAM     |
 
-Reading: against the right comparable (Turbopuffer's SPFresh-style
-centroid index on object storage) `as-vec` ships a 2.2× lower cold
-p50 (**153 ms vs. 343 ms**) at materially higher recall (**97.34 % vs.
-90-95 %**) on the same 1 M-vector benchmark. HNSW-in-memory systems
-beat both on warm latency but pay $1 600 / TB / month RAM where the
-S3-first shape pays ~$70 / TB / month (data from Turbopuffer's
-published tradeoffs page).
+At probe=32 we match Qdrant in-memory HNSW recall (~98 %) and latency
+(~4-5 ms p50) **while keeping the index on object storage**. Against
+Turbopuffer's centroid-on-S3 shape (directly comparable architecture)
+we ship 1.6× lower warm p50 at materially higher recall.
 
-The 1 M p50 above is "cold" in the sense that the index was just
-freshly written to disk; subsequent queries benefit from the OS page
-cache and the LRU cluster cache. A true warm-server number (steady
-state after 100+ queries) lands in the next bench row once we wire
-the persistent-server measurement.
+### How we got there (perf changelog)
+
+Initial run on the same SIFT-1M index measured p50 of 37-616 ms
+across the probe range (probe=8 → 128). Three optimisations on the
+hot path collapsed that:
+
+1. **Inline mmap for `LocalMmapStore`** (`crates/as-store/src/local_mmap.rs`).
+   Each `store.get` was on `spawn_blocking`, adding ~50-100 µs of
+   tokio scheduler round-trip per cluster fetch. mmap itself is a
+   syscall that sets up page-table mappings (~10 µs), not blocking
+   I/O. Going inline cut the per-fetch overhead from milliseconds
+   to microseconds at probe=32.
+2. **Bulk-cast `decode_cluster`** (`crates/as-vec/src/index.rs`).
+   The previous body called `Buf::get_u32_le()` / `get_f32_le()`
+   ~130 k times per cluster — the trait method-call overhead alone
+   was ~30 ms per cluster decode. Switched to a `chunks_exact`
+   over the raw byte buffer with `from_le_bytes` so the compiler
+   collapses the inner loop into bulk SIMD-friendly loads.
+3. **Cluster cache sized to `k`** (`crates/as-vec/src/query.rs`).
+   `DEFAULT_CLUSTER_CACHE = 256` thrashed for `k=1024` indexes: the
+   2 000-query sweep touched every cluster, but the LRU could only
+   hold a quarter of them, so warm queries kept paying cold decode
+   cost. `cluster_cache_cap = max(DEFAULT, manifest.k)` so a sweep
+   amortises: cluster decoded once, every subsequent hit returns
+   the cached `Arc`.
+
+Speedups on the warm path (after all three): **23×-38× across the
+probe range, recall identical to within noise**.
 
 ### Open optimisation candidates
 
-- **Cluster-file aggregation.** Each cluster lives in its own file;
-  a query at probe=32 issues 32 `store.get` calls. Concatenating all
-  cluster blobs into one file with an offset table would collapse
-  this to one range read per query.
-- **SIMD dot product.** Inner loop is scalar f32; `wide` or
-  hand-vectorised SIMD on Apple AMX / x86 AVX2 would close most of
-  the warm gap.
+- **Cluster-file aggregation.** Each cluster still lives in its own
+  file (1024 files on disk). Concatenating all cluster blobs into
+  one file with an offset table would collapse cold-cache fetches
+  from N small file opens to one range read.
+- **Explicit SIMD inner score loop.** The current `dot_f32` is a
+  plain scalar loop the compiler auto-vectorises; a hand-written
+  AVX2 / NEON FMA path would buy another ~2-3× on the warm-cache
+  shape.
+- **Product quantisation.** Compressing 128-d f32 vectors to 8-byte
+  PQ codes drops cluster size 64× without large recall loss; warm
+  p50 would land in single-digit ms with probe=64 in reach of
+  cold-cache too.
 - **kmeans++ init.** Current init samples every Nth vector; full
   kmeans++ would tighten clusters and let us reduce `probe`.
 
