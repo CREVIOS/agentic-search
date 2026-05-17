@@ -1,3 +1,46 @@
+# agentic-search — PLAN (v3, Turbopuffer-style for M-doc S3 corpora)
+
+## v3 update (post-pivot)
+
+The agentic loop (grep + tree-sitter + parallel fan-out + cache) is what
+agents already get from Claude Code / DeepAgents and is great for source
+trees. It does **not** scale to millions of markdown / document objects
+in S3, because every query is O(N) reads against the bucket.
+
+For the M-doc S3 case (the user's actual workload — agents currently
+copy a full prefix to local FS before searching) we adopt the
+[Turbopuffer model](docs/RESEARCH.md):
+
+1. **Object storage is the database**, not a cold tier.
+2. **Namespace = S3 prefix.** Each corpus is its own namespace.
+3. **Centroid (clustered) ANN, not HNSW.** Query is two roundtrips:
+   load centroids, fetch top-`probe` cluster files.
+4. **Tier cache** (`as-cache`) progressively inflates hot data: S3 →
+   NVMe LRU → memory LRU.
+5. **No BM25 / tantivy** on the default path. Vector + grep are the
+   only two stages.
+
+Files on object storage:
+
+```
+s3://bucket/.agentic-search/index/<ns>/
+    manifest.json              version, dim, K, embed_model, sizes
+    centroids.f32              K * dim float32 (always in mem)
+    cluster_00000.bin          [u32 doc_id, [f32; dim] vec] *
+    cluster_00001.bin          ...
+    cluster_<K-1>.bin
+    docs.jsonl                 per-doc metadata (uri, byte_range, snippet)
+```
+
+This is what `as-vec` ships in v3 (was a stub in v2). Build pipeline
+chunks → embeds (BGE-small via `as-embed` / fastembed-rs) → trains
+k-means → writes segments. Query: embed → top centroids → fetch those
+cluster files in parallel → cosine over the union → top-k.
+
+Below is the original v2 plan, retained for reference.
+
+---
+
 # agentic-search — PLAN (v2, post-research)
 
 > Reframed after the [research synthesis](RESEARCH.md). The original plan

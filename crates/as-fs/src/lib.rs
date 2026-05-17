@@ -24,6 +24,10 @@ impl Fs {
         self.store.get(key).await
     }
 
+    pub async fn read_fresh(&self, meta: &ObjectMeta) -> Result<Bytes> {
+        self.store.get_fresh(meta).await
+    }
+
     pub async fn read_at(&self, key: &str, range: Range<u64>) -> Result<Bytes> {
         self.store.get_range(key, range).await
     }

@@ -36,6 +36,8 @@ node_modules/
 .envrc
 *.log
 .agentic-search/
+.fastembed_cache/
+**/.fastembed_cache/
 
 # Bench artifacts
 bench/results/*.json

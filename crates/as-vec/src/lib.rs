@@ -1,76 +1,33 @@
-//! Vector layer: embeddings (via fastembed-rs / ONNX) + HNSW ANN.
+//! Turbopuffer-style centroid (clustered) vector index over object
+//! storage.
+//!
+//! On-disk layout under a namespace prefix:
+//!
+//! ```text
+//! <ns>/manifest.json   // version, dim, K, embed_model, cluster sizes
+//! <ns>/centroids.f32   // K * dim float32; always pinned in memory
+//! <ns>/cluster_<id>.bin // doc records for one cluster (see record format)
+//! <ns>/docs.jsonl      // doc metadata: id, uri, byte_range, snippet
+//! ```
+//!
+//! Record format inside `cluster_<id>.bin` is a tight, length-prefixed
+//! sequence of `(u32 doc_id, [f32; dim] vec)`. We do not deduplicate
+//! within a cluster; rebuilds rewrite the file.
+//!
+//! Query path is two roundtrips for cold data:
+//!
+//! 1. Read `centroids.f32` (always cached in memory after the first call).
+//! 2. Score query vs centroids, pick top-`probe` clusters, range-read
+//!    those `cluster_<id>.bin` files in parallel.
+//!
+//! For warm data both steps hit the in-process / NVMe tier cache in
+//! `as-cache` and complete in <10 ms on 1 M vectors.
 
-use as_core::{Error, Hit, Result};
-use hnsw_rs::prelude::{DistCosine, Hnsw};
-use std::sync::RwLock;
+pub mod build;
+pub mod index;
+pub mod kmeans;
+pub mod manifest;
+pub mod query;
 
-pub mod embed;
-
-pub struct VectorIndex {
-    inner: RwLock<Hnsw<'static, f32, DistCosine>>,
-    ids: RwLock<Vec<String>>,
-    uris: RwLock<Vec<String>>,
-    dim: usize,
-}
-
-impl VectorIndex {
-    pub fn new(dim: usize, max_nb_connection: usize, ef_construction: usize) -> Self {
-        let hnsw = Hnsw::<f32, DistCosine>::new(
-            max_nb_connection,
-            10_000_000,
-            16,
-            ef_construction,
-            DistCosine {},
-        );
-        Self {
-            inner: RwLock::new(hnsw),
-            ids: RwLock::new(Vec::new()),
-            uris: RwLock::new(Vec::new()),
-            dim,
-        }
-    }
-
-    pub fn dim(&self) -> usize {
-        self.dim
-    }
-
-    pub fn insert(&self, id: String, uri: String, vec: &[f32]) -> Result<()> {
-        if vec.len() != self.dim {
-            return Err(Error::Index(format!(
-                "dim mismatch: got {}, want {}",
-                vec.len(),
-                self.dim
-            )));
-        }
-        let mut ids = self.ids.write().unwrap();
-        let mut uris = self.uris.write().unwrap();
-        let idx = ids.len();
-        ids.push(id);
-        uris.push(uri);
-        self.inner.write().unwrap().insert((vec, idx));
-        Ok(())
-    }
-
-    pub fn search(&self, q: &[f32], k: usize, ef: usize) -> Result<Vec<Hit>> {
-        if q.len() != self.dim {
-            return Err(Error::Index(format!(
-                "dim mismatch: got {}, want {}",
-                q.len(),
-                self.dim
-            )));
-        }
-        let ids = self.ids.read().unwrap();
-        let uris = self.uris.read().unwrap();
-        let raw = self.inner.read().unwrap().search(q, k, ef);
-        Ok(raw
-            .into_iter()
-            .map(|n| Hit {
-                id: ids[n.d_id].clone(),
-                uri: uris[n.d_id].clone(),
-                score: 1.0 - n.distance,
-                snippet: None,
-                metadata: serde_json::Value::Null,
-            })
-            .collect())
-    }
-}
+pub use index::Index;
+pub use manifest::{Manifest, MANIFEST_VERSION};

@@ -150,31 +150,76 @@ async fn cmd_grep(
     };
     let pg = ParallelGrep::new(fs.clone());
     let spans = pg.scan_prefix(&prefix, &pattern, &opts).await?;
-    let mut printed: Vec<Span> = Vec::with_capacity(spans.len());
-    if ast {
-        // Group by URI so each file is parsed once for many spans.
-        use std::collections::{HashMap, HashSet};
-        let mut by_uri: HashMap<String, Vec<Span>> = HashMap::new();
-        for s in spans {
-            by_uri.entry(s.uri.clone()).or_default().push(s);
-        }
-        let mut seen: HashSet<String> = HashSet::new();
-        for (uri, mut group) in by_uri {
-            let bytes = match fs.read(&uri).await {
-                Ok(b) => b,
-                Err(_) => continue,
-            };
-            widen_many(&bytes, &mut group)?;
-            for s in group {
-                if seen.insert(s.dedup_key()) {
-                    printed.push(s);
-                }
+    let printed = if ast {
+        widen_spans(&fs, spans).await?
+    } else {
+        spans
+    };
+    print_spans(&printed);
+    Ok(())
+}
+
+async fn cmd_find(
+    uri: String,
+    symbol: String,
+    concurrency: usize,
+    max_hits: usize,
+) -> anyhow::Result<()> {
+    // `find_symbol` is implemented as a regex grep of an identifier-ish
+    // boundary around `symbol`, followed by AST widening. This avoids a
+    // language-specific parser walk over every byte of every file.
+    let (fs, prefix) = open_fs(&uri)?;
+    let pattern = format!(r"\b{}\b", regex_escape(&symbol));
+    let opts = ParallelOpts {
+        grep: GrepOpts {
+            case_insensitive: false,
+            multi_line: false,
+            max_hits_per_file: None,
+        },
+        concurrency,
+        max_object_bytes: 64 * 1024 * 1024,
+        max_total_spans: Some(max_hits.saturating_mul(4)),
+    };
+    let pg = ParallelGrep::new(fs.clone());
+    let spans = pg.scan_prefix(&prefix, &pattern, &opts).await?;
+    let mut spans = widen_spans(&fs, spans).await?;
+    spans.retain(|s| s.symbol.as_deref() == Some(symbol.as_str()));
+    spans.truncate(max_hits);
+    print_spans(&spans);
+    Ok(())
+}
+
+async fn widen_spans(fs: &Arc<Fs>, spans: Vec<Span>) -> anyhow::Result<Vec<Span>> {
+    use std::collections::{BTreeMap, HashSet};
+    let mut by_uri: BTreeMap<String, Vec<Span>> = BTreeMap::new();
+    for s in spans {
+        by_uri.entry(s.uri.clone()).or_default().push(s);
+    }
+    let mut out: Vec<Span> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for (uri, mut group) in by_uri {
+        let bytes = match fs.read(&uri).await {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        widen_many(&bytes, &mut group)?;
+        for s in group {
+            if seen.insert(s.dedup_key()) {
+                out.push(s);
             }
         }
-    } else {
-        printed.extend(spans);
     }
-    for s in &printed {
+    out.sort_by(|a, b| {
+        a.uri
+            .cmp(&b.uri)
+            .then(a.line_range[0].cmp(&b.line_range[0]))
+            .then(a.byte_range.start.cmp(&b.byte_range.start))
+    });
+    Ok(out)
+}
+
+fn print_spans(spans: &[Span]) {
+    for s in spans {
         let sym = s.symbol.as_deref().unwrap_or("");
         let snippet_line = s
             .snippet
@@ -194,20 +239,6 @@ async fn cmd_grep(
             snippet_line
         );
     }
-    Ok(())
-}
-
-async fn cmd_find(
-    uri: String,
-    symbol: String,
-    concurrency: usize,
-    max_hits: usize,
-) -> anyhow::Result<()> {
-    // `find_symbol` is implemented as a regex grep of an identifier-ish
-    // boundary around `symbol`, followed by AST widening. This avoids a
-    // language-specific parser walk over every byte of every file.
-    let pattern = format!(r"\b{}\b", regex_escape(&symbol));
-    cmd_grep(uri, pattern, false, max_hits, concurrency, true).await
 }
 
 fn regex_escape(s: &str) -> String {

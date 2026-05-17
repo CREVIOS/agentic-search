@@ -7,7 +7,8 @@
 use crate::{Span, SpanKind};
 use as_core::{Error, Hit, Result};
 use grep_regex::RegexMatcherBuilder;
-use grep_searcher::{sinks::UTF8, Searcher};
+use grep_searcher::{Searcher, Sink, SinkMatch};
+use std::io;
 
 #[derive(Clone, Debug, Default)]
 pub struct GrepOpts {
@@ -50,56 +51,49 @@ pub fn grep_bytes_spans(
         .map_err(|e| Error::Index(format!("bad regex: {e}")))?;
 
     let cap = opts.max_hits_per_file.unwrap_or(usize::MAX);
-    let mut spans: Vec<Span> = Vec::new();
-    // Precompute line starts so we can recover byte ranges.
-    let line_starts = line_offsets(bytes);
+    let mut sink = SpanSink {
+        uri,
+        spans: Vec::new(),
+        cap,
+    };
 
     Searcher::new()
-        .search_slice(
-            &matcher,
-            bytes,
-            UTF8(|lnum, line| {
-                if spans.len() >= cap {
-                    return Ok(false);
-                }
-                let idx = (lnum.saturating_sub(1)) as usize;
-                let start = line_starts.get(idx).copied().unwrap_or(0);
-                let end = line_starts
-                    .get(idx + 1)
-                    .copied()
-                    .unwrap_or(bytes.len() as u64);
-                spans.push(Span {
-                    uri: uri.to_string(),
-                    byte_range: start..end,
-                    line_range: [lnum as u32, lnum as u32],
-                    symbol: None,
-                    kind: SpanKind::Line,
-                    snippet: Some(line.trim_end().to_string()),
-                    score: 1.0,
-                });
-                Ok(true)
-            }),
-        )
+        .search_slice(&matcher, bytes, &mut sink)
         .map_err(|e| Error::Index(format!("grep: {e}")))?;
 
-    Ok(spans)
+    Ok(sink.spans)
 }
 
-/// Byte offsets of the start of each line in `bytes`. `line_offsets(b)[i]`
-/// is the start of the (i+1)-th line; `line_offsets(b).last()` equals
-/// `bytes.len()`.
-fn line_offsets(bytes: &[u8]) -> Vec<u64> {
-    let mut offsets = Vec::with_capacity(64);
-    offsets.push(0);
-    for (i, b) in bytes.iter().enumerate() {
-        if *b == b'\n' {
-            offsets.push((i + 1) as u64);
+struct SpanSink<'a> {
+    uri: &'a str,
+    spans: Vec<Span>,
+    cap: usize,
+}
+
+impl Sink for SpanSink<'_> {
+    type Error = io::Error;
+
+    fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch<'_>) -> io::Result<bool> {
+        if self.spans.len() >= self.cap {
+            return Ok(false);
         }
+        let line_start = mat.line_number().unwrap_or(1) as u32;
+        let line_count = mat.lines().count().max(1) as u32;
+        let line_end = line_start.saturating_add(line_count.saturating_sub(1));
+        let start = mat.absolute_byte_offset();
+        let end = start.saturating_add(mat.bytes().len() as u64);
+        let snippet = String::from_utf8_lossy(mat.bytes()).trim_end().to_string();
+        self.spans.push(Span {
+            uri: self.uri.to_string(),
+            byte_range: start..end,
+            line_range: [line_start, line_end],
+            symbol: None,
+            kind: SpanKind::Line,
+            snippet: Some(snippet),
+            score: 1.0,
+        });
+        Ok(self.spans.len() < self.cap)
     }
-    if *offsets.last().unwrap() != bytes.len() as u64 {
-        offsets.push(bytes.len() as u64);
-    }
-    offsets
 }
 
 #[cfg(test)]

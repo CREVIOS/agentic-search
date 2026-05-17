@@ -53,6 +53,7 @@ impl ParallelGrep {
             FuturesUnordered::new();
         let mut spans_all: Vec<Span> = Vec::new();
         let cap = opts.max_total_spans.unwrap_or(usize::MAX);
+        let concurrency = opts.concurrency.max(1);
 
         // Drain helper: pulls completed tasks until under the concurrency cap.
         async fn drain(
@@ -91,22 +92,28 @@ impl ParallelGrep {
             let key = meta.key.clone();
 
             in_flight.push(tokio::spawn(async move {
-                let bytes = fs.read(&key).await?;
+                let bytes = fs.read_fresh(&meta).await?;
                 grep_bytes_spans(&key, &bytes, &pattern, &grep_opts)
             }));
 
-            if drain(&mut in_flight, &mut spans_all, cap, opts.concurrency).await? {
-                return Ok(truncate(spans_all, cap));
+            if drain(&mut in_flight, &mut spans_all, cap, concurrency).await? {
+                return Ok(sort_truncate(spans_all, cap));
             }
         }
 
         // Drain the tail.
         drain(&mut in_flight, &mut spans_all, cap, 0).await?;
-        Ok(truncate(spans_all, cap))
+        Ok(sort_truncate(spans_all, cap))
     }
 }
 
-fn truncate(mut spans: Vec<Span>, cap: usize) -> Vec<Span> {
+fn sort_truncate(mut spans: Vec<Span>, cap: usize) -> Vec<Span> {
+    spans.sort_by(|a, b| {
+        a.uri
+            .cmp(&b.uri)
+            .then(a.line_range[0].cmp(&b.line_range[0]))
+            .then(a.byte_range.start.cmp(&b.byte_range.start))
+    });
     if spans.len() > cap {
         spans.truncate(cap);
     }

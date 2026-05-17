@@ -24,7 +24,11 @@ impl AppState {
     /// Open a URI, return a tiered FS plus the in-store key prefix.
     pub fn open_fs(&self, uri: &str) -> Result<(Arc<Fs>, String)> {
         let (store, prefix) = as_store::open(uri)?;
-        let store = as_cache::wrap(store, self.tier.clone());
+        let store = if uri.starts_with("file://") {
+            store
+        } else {
+            as_cache::wrap(store, self.tier.clone())
+        };
         Ok((Arc::new(Fs::new(store)), prefix))
     }
 }

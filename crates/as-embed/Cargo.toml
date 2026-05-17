@@ -1,0 +1,18 @@
+[package]
+name = "as-embed"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Embedding wrapper for agentic-search (fastembed-rs / ONNX)"
+
+[dependencies]
+as-core = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+fastembed = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

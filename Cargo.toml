@@ -7,6 +7,7 @@ members = [
     "crates/as-grep",
     "crates/as-ast",
     "crates/as-cache",
+    "crates/as-embed",
     "crates/as-index",
     "crates/as-vec",
     "crates/as-web",
@@ -28,6 +29,7 @@ default-members = [
     "crates/as-grep",
     "crates/as-ast",
     "crates/as-cache",
+    "crates/as-embed",
     "crates/as-index",
     "crates/as-vec",
     "crates/as-web",
@@ -96,6 +98,7 @@ as-fs = { path = "crates/as-fs" }
 as-grep = { path = "crates/as-grep" }
 as-ast = { path = "crates/as-ast" }
 as-cache = { path = "crates/as-cache" }
+as-embed = { path = "crates/as-embed" }
 as-index = { path = "crates/as-index" }
 as-vec = { path = "crates/as-vec" }
 as-web = { path = "crates/as-web" }

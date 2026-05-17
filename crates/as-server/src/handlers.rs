@@ -207,38 +207,178 @@ pub async fn search(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SearchRequest>,
 ) -> Result<Json<GrepResponse>, AppError> {
+    if req.k == 0 {
+        return Ok(Json(GrepResponse { spans: Vec::new() }));
+    }
+    let terms = query_terms(&req.query);
+    if terms.is_empty() {
+        return Ok(Json(GrepResponse { spans: Vec::new() }));
+    }
+    let pattern = terms
+        .iter()
+        .map(|t| regex_escape(t))
+        .collect::<Vec<_>>()
+        .join("|");
+    let candidate_limit = req.k.saturating_mul(8).max(64).min(2000);
     let grep_req = GrepRequest {
         uri: req.uri,
-        pattern: regex_escape(&req.query),
+        pattern,
         case_insensitive: true,
-        max_hits: req.k,
+        max_hits: candidate_limit,
         concurrency: 32,
         ast: true,
     };
-    grep(State(state), Json(grep_req)).await
+    let raw = grep(State(state), Json(grep_req)).await?;
+    Ok(Json(GrepResponse {
+        spans: rank_search_spans(raw.0.spans, &req.query, &terms, req.k),
+    }))
 }
 
 async fn widen_spans(fs: &Arc<Fs>, spans: Vec<Span>) -> anyhow::Result<Vec<Span>> {
-    use std::collections::{HashMap, HashSet};
-    let mut by_uri: HashMap<String, Vec<Span>> = HashMap::new();
+    use std::collections::{BTreeMap, HashSet};
+    let mut by_uri: BTreeMap<String, Vec<Span>> = BTreeMap::new();
     for s in spans {
         by_uri.entry(s.uri.clone()).or_default().push(s);
     }
+    let mut pending = futures::stream::FuturesUnordered::new();
     let mut out: Vec<Span> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    for (uri, mut group) in by_uri {
-        let bytes = match fs.read(&uri).await {
-            Ok(b) => b,
-            Err(_) => continue,
-        };
-        widen_many(&bytes, &mut group)?;
+    for (uri, group) in by_uri {
+        let fs = fs.clone();
+        pending.push(tokio::spawn(async move {
+            let bytes = fs.read(&uri).await?;
+            tokio::task::spawn_blocking(move || {
+                let mut group = group;
+                widen_many(&bytes, &mut group)?;
+                Ok::<_, anyhow::Error>(group)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("ast join: {e}"))?
+        }));
+        if pending.len() >= 16 {
+            drain_widened(&mut pending, &mut out, &mut seen).await?;
+        }
+    }
+    while !pending.is_empty() {
+        drain_widened(&mut pending, &mut out, &mut seen).await?;
+    }
+    out.sort_by(|a, b| {
+        a.uri
+            .cmp(&b.uri)
+            .then(a.line_range[0].cmp(&b.line_range[0]))
+            .then(a.byte_range.start.cmp(&b.byte_range.start))
+    });
+    Ok(out)
+}
+
+async fn drain_widened(
+    pending: &mut futures::stream::FuturesUnordered<
+        tokio::task::JoinHandle<anyhow::Result<Vec<Span>>>,
+    >,
+    out: &mut Vec<Span>,
+    seen: &mut std::collections::HashSet<String>,
+) -> anyhow::Result<()> {
+    if let Some(joined) = pending.next().await {
+        let group = joined.map_err(|e| anyhow::anyhow!("widen task join: {e}"))??;
         for s in group {
             if seen.insert(s.dedup_key()) {
                 out.push(s);
             }
         }
     }
-    Ok(out)
+    Ok(())
+}
+
+fn query_terms(query: &str) -> Vec<String> {
+    use std::collections::BTreeSet;
+    let raw: Vec<String> = query
+        .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '-'))
+        .filter_map(|t| {
+            let t = t.trim().to_ascii_lowercase();
+            (t.len() >= 2).then_some(t)
+        })
+        .collect();
+    let mut filtered = BTreeSet::new();
+    for t in &raw {
+        if !is_stopword(t) {
+            filtered.insert(t.clone());
+        }
+    }
+    if filtered.is_empty() {
+        raw.into_iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    } else {
+        filtered.into_iter().take(16).collect()
+    }
+}
+
+fn is_stopword(s: &str) -> bool {
+    matches!(
+        s,
+        "find"
+            | "search"
+            | "show"
+            | "inside"
+            | "within"
+            | "function"
+            | "method"
+            | "class"
+            | "symbol"
+            | "file"
+            | "files"
+            | "the"
+            | "and"
+            | "or"
+            | "with"
+            | "from"
+            | "for"
+            | "into"
+            | "where"
+            | "that"
+            | "this"
+            | "use"
+            | "uses"
+            | "using"
+    )
+}
+
+fn rank_search_spans(mut spans: Vec<Span>, query: &str, terms: &[String], k: usize) -> Vec<Span> {
+    let phrase = query.to_ascii_lowercase();
+    for span in &mut spans {
+        let haystack = format!(
+            "{}\n{}\n{}",
+            span.uri,
+            span.symbol.as_deref().unwrap_or(""),
+            span.snippet.as_deref().unwrap_or("")
+        )
+        .to_ascii_lowercase();
+        let term_hits = terms
+            .iter()
+            .filter(|t| haystack.contains(t.as_str()))
+            .count();
+        let symbol_hits = span
+            .symbol
+            .as_deref()
+            .map(|sym| {
+                let sym = sym.to_ascii_lowercase();
+                terms.iter().filter(|t| sym == **t).count()
+            })
+            .unwrap_or(0);
+        let phrase_boost = (!phrase.is_empty() && haystack.contains(&phrase)) as u8 as f32;
+        span.score = term_hits as f32 + (symbol_hits as f32 * 0.75) + phrase_boost;
+    }
+    spans.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.uri.cmp(&b.uri))
+            .then(a.line_range[0].cmp(&b.line_range[0]))
+            .then(a.byte_range.start.cmp(&b.byte_range.start))
+    });
+    spans.truncate(k);
+    spans
 }
 
 fn regex_escape(s: &str) -> String {

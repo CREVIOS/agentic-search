@@ -14,7 +14,7 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ObjectMeta {
     pub key: String,
     pub size: u64,
@@ -25,6 +25,12 @@ pub struct ObjectMeta {
 #[async_trait]
 pub trait Store: Send + Sync {
     async fn get(&self, key: &str) -> Result<Bytes>;
+    /// Read an object when the caller already has fresh listing/head
+    /// metadata for it. Caches can use this to validate without an
+    /// additional HEAD request on the hot search path.
+    async fn get_fresh(&self, meta: &ObjectMeta) -> Result<Bytes> {
+        self.get(&meta.key).await
+    }
     async fn get_range(&self, key: &str, range: Range<u64>) -> Result<Bytes>;
     async fn put(&self, key: &str, data: Bytes) -> Result<()>;
     async fn delete(&self, key: &str) -> Result<()>;

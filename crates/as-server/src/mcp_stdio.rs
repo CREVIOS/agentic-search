@@ -125,7 +125,7 @@ async fn handle(state: Arc<AppState>, req: RpcRequest) -> anyhow::Result<Value> 
         "initialize" => Ok(json!({
             "protocolVersion": PROTOCOL_VERSION,
             "serverInfo": { "name": "agentic-search", "version": env!("CARGO_PKG_VERSION") },
-            "capabilities": { "tools": {} }
+            "capabilities": { "tools": { "listChanged": false } }
         })),
         // Notifications: just ack. We never reply because `run` already
         // suppresses responses for messages without `id`.
