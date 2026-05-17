@@ -1,4 +1,4 @@
-use as_ast::widen_many;
+use as_ast::{widen_with_cache, SpanCache};
 use as_fs::Fs;
 use as_grep::{grep_bytes_spans, GrepOpts, ParallelGrep, ParallelOpts, Span};
 use clap::{Parser, Subcommand};
@@ -217,12 +217,14 @@ async fn widen_spans(fs: &Arc<Fs>, spans: Vec<Span>) -> anyhow::Result<Vec<Span>
     }
     let mut out: Vec<Span> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
+    // One cache per CLI invocation; we don't yet persist it across runs.
+    let cache = SpanCache::default();
     for (uri, mut group) in by_uri {
         let bytes = match fs.read(&uri).await {
             Ok(b) => b,
             Err(_) => continue,
         };
-        widen_many(&bytes, &mut group)?;
+        widen_with_cache(&cache, &bytes, &mut group)?;
         for s in group {
             if seen.insert(s.dedup_key()) {
                 out.push(s);

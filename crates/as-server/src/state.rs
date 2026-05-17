@@ -6,6 +6,7 @@
 //! cache then only ever helps on the NVMe layer and the "warm" tier is
 //! effectively a lie.
 
+use as_ast::SpanCache;
 use as_cache::TierConfig;
 use as_core::Result;
 use as_fs::Fs;
@@ -14,10 +15,22 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[derive(Default)]
 pub struct AppState {
     tier: TierConfig,
     stores: Mutex<HashMap<String, ArcStore>>,
+    /// Shared AST parse cache so repeated `grep --ast` requests against
+    /// the same prefix don't reparse unchanged files.
+    pub ast: Arc<SpanCache>,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            tier: TierConfig::default(),
+            stores: Mutex::new(HashMap::new()),
+            ast: Arc::new(SpanCache::default()),
+        }
+    }
 }
 
 impl AppState {
@@ -25,6 +38,7 @@ impl AppState {
         Self {
             tier,
             stores: Mutex::new(HashMap::new()),
+            ast: Arc::new(SpanCache::default()),
         }
     }
 

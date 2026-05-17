@@ -3,7 +3,7 @@
 //! bridge in `mcp_stdio` adapts these same JSON shapes for stdio clients.
 
 use crate::AppState;
-use as_ast::widen_many;
+use as_ast::{widen_with_cache, SpanCache};
 use as_fs::Fs;
 use as_grep::{GrepOpts, ParallelGrep, ParallelOpts, Span};
 use axum::{extract::State, http::StatusCode, Json};
@@ -146,7 +146,7 @@ pub async fn grep(
     let pg = ParallelGrep::new(fs.clone());
     let spans = pg.scan_prefix(&prefix, &req.pattern, &opts).await?;
     let spans = if req.ast {
-        widen_spans(&fs, spans).await?
+        widen_spans(&fs, &state.ast, spans).await?
     } else {
         spans
     };
@@ -362,7 +362,11 @@ pub async fn search(
     }))
 }
 
-async fn widen_spans(fs: &Arc<Fs>, spans: Vec<Span>) -> anyhow::Result<Vec<Span>> {
+async fn widen_spans(
+    fs: &Arc<Fs>,
+    ast_cache: &Arc<SpanCache>,
+    spans: Vec<Span>,
+) -> anyhow::Result<Vec<Span>> {
     use std::collections::{BTreeMap, HashSet};
     let mut by_uri: BTreeMap<String, Vec<Span>> = BTreeMap::new();
     for s in spans {
@@ -373,11 +377,12 @@ async fn widen_spans(fs: &Arc<Fs>, spans: Vec<Span>) -> anyhow::Result<Vec<Span>
     let mut seen: HashSet<String> = HashSet::new();
     for (uri, group) in by_uri {
         let fs = fs.clone();
+        let cache = ast_cache.clone();
         pending.push(tokio::spawn(async move {
             let bytes = fs.read(&uri).await?;
             tokio::task::spawn_blocking(move || {
                 let mut group = group;
-                widen_many(&bytes, &mut group)?;
+                widen_with_cache(&cache, &bytes, &mut group)?;
                 Ok::<_, anyhow::Error>(group)
             })
             .await
