@@ -152,6 +152,15 @@ def bench_server(
                 return r.read()
 
         def time_runs(body: dict, n: int) -> list[float]:
+            # Single warm-up run discarded: the AST cache, tier cache,
+            # and tokio runtime all amortise across the same prefix
+            # after the first request. Without this the "warm AST
+            # cache" label is misleading — run #1 paid the cold parse
+            # cost and contaminated p50/p95/mean.
+            try:
+                post("/grep", body)
+            except Exception:
+                pass
             durations = []
             payload_len = 0
             for _ in range(n):

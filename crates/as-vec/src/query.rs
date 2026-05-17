@@ -145,31 +145,29 @@ impl VecIndex {
             })
             .collect();
 
-        let mut all_records: Vec<Arc<Vec<crate::index::ClusterRecord>>> = Vec::with_capacity(probe);
-        while let Some(r) = futs.next().await {
-            let (cid, recs) = r?;
-            self.cluster_cache.lock().put(cid, recs.clone());
-            all_records.push(recs);
-        }
-
-        // Score every retrieved record and keep only the top `k` via a
-        // bounded min-heap. The full-sort approach was O(N log N) over
-        // every record across every probed cluster; this is O(N log k),
-        // which matters once probe × cluster_size is in the millions.
+        // Score each cluster *as it arrives* and drop our strong ref
+        // before pulling the next one in. The cluster cache still
+        // holds its own `Arc`, so a hot cluster stays warm; this loop
+        // does not pile up `probe` decoded clusters in memory before
+        // the first record is scored. For probe=64, 5000 docs each,
+        // dim=384, that's the difference between ~470 MB resident and
+        // ~7 MB.
         let dim = self.manifest.dim;
         let k = k.max(1);
         let mut heap: BinaryHeap<Reverse<HeapEntry>> = BinaryHeap::with_capacity(k + 1);
-        for recs in &all_records {
-            for r in recs.iter() {
+        while let Some(r) = futs.next().await {
+            let (cid, recs) = r?;
+            self.cluster_cache.lock().put(cid, recs.clone());
+            for rec in recs.iter() {
                 let s: f32 = query
                     .iter()
                     .take(dim)
-                    .zip(r.vector.iter())
+                    .zip(rec.vector.iter())
                     .map(|(a, b)| a * b)
                     .sum();
                 let entry = HeapEntry {
                     score: s,
-                    doc_id: r.doc_id,
+                    doc_id: rec.doc_id,
                 };
                 if heap.len() < k {
                     heap.push(Reverse(entry));
@@ -180,6 +178,9 @@ impl VecIndex {
                     }
                 }
             }
+            // `recs` drops here; if the cache evicted it, memory is
+            // reclaimed before we go fetch the next cluster.
+            drop(recs);
         }
         // BinaryHeap order is not sorted; drain into a vec and sort
         // *that* descending. Sorting `k` items, not all `N`.

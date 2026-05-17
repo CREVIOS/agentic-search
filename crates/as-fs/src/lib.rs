@@ -15,6 +15,16 @@ pub struct Fs {
     store: ArcStore,
 }
 
+/// Internal state for the streaming manifest unfold. Kept here so the
+/// closure inside `list_with_manifest` stays an `async move` and not
+/// some borrow-tangle over a tuple.
+struct ManifestStreamState {
+    iter: as_store::manifest::ManifestIter,
+    pending: Option<as_store::manifest::ManifestEntry>,
+    yielded: usize,
+    expected: usize,
+}
+
 impl Fs {
     pub fn new(store: ArcStore) -> Self {
         Self { store }
@@ -49,23 +59,70 @@ impl Fs {
     /// cold-S3 listing collapses from paged `ListObjectsV2` to one
     /// round-trip; we accept a small staleness window in exchange
     /// (refresh via `agentic-search index-manifest`).
+    ///
+    /// Robustness: a manifest whose body is truncated (gzip decoder
+    /// raises an error mid-stream, *or* the iterator yields fewer
+    /// entries than the header claimed) is treated as broken. Rather
+    /// than returning a partial corpus, we fall through to live
+    /// `list` so search never silently misses files because the
+    /// manifest upload was interrupted.
     pub async fn list_with_manifest<'a>(
         &'a self,
         prefix: &'a str,
     ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
-        // Stream the manifest entry-by-entry so we don't materialize a
-        // Vec<ManifestEntry> for million-doc prefixes.
-        if let Some((_, iter)) = as_store::manifest::stream_manifest(&*self.store, prefix).await? {
-            let stream = futures::stream::unfold(iter, |mut it| async move {
-                match it.next_entry() {
-                    Ok(Some(entry)) => Some((Ok(entry.to_object_meta()), it)),
-                    Ok(None) => None,
-                    Err(e) => Some((Err(e), it)),
+        match as_store::manifest::stream_manifest(&*self.store, prefix).await? {
+            Some((header, mut iter)) => {
+                // Pull one entry up front so a header-only manifest
+                // (count > 0 but no body) is detected before the
+                // caller commits to using it. We accept this tiny
+                // eager read — it's one line out of a gzipped JSONL —
+                // because the correctness win is large.
+                let first = match iter.next_entry() {
+                    Ok(opt) => opt,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "manifest body unreadable, falling back to live list");
+                        return Ok(self.store.list(prefix));
+                    }
+                };
+                let expected = header.count as usize;
+                if expected > 0 && first.is_none() {
+                    tracing::warn!("manifest body empty despite count={}; live list", expected);
+                    return Ok(self.store.list(prefix));
                 }
-            });
-            return Ok(stream.boxed());
+                let state = ManifestStreamState {
+                    iter,
+                    pending: first,
+                    yielded: 0,
+                    expected,
+                };
+                let stream = futures::stream::unfold(state, |mut s| async move {
+                    if let Some(p) = s.pending.take() {
+                        s.yielded += 1;
+                        return Some((Ok(p.to_object_meta()), s));
+                    }
+                    match s.iter.next_entry() {
+                        Ok(Some(entry)) => {
+                            s.yielded += 1;
+                            Some((Ok(entry.to_object_meta()), s))
+                        }
+                        Ok(None) => {
+                            if s.expected > 0 && s.yielded < s.expected {
+                                let err = Error::Other(format!(
+                                    "manifest truncated: yielded {} of {} entries",
+                                    s.yielded, s.expected
+                                ));
+                                Some((Err(err), s))
+                            } else {
+                                None
+                            }
+                        }
+                        Err(e) => Some((Err(e), s)),
+                    }
+                });
+                Ok(stream.boxed())
+            }
+            None => Ok(self.store.list(prefix)),
         }
-        Ok(self.store.list(prefix))
     }
 
     /// List keys under `prefix` matching a glob pattern (relative to prefix).

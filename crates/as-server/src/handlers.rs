@@ -405,6 +405,14 @@ pub struct SearchRequest {
     pub k: usize,
     #[serde(default)]
     pub response_format: ResponseFormat,
+    /// Endpoint-wide wall-time ceiling. Defaults to 15s; clamped to
+    /// `MAX_SEARCH_BUDGET_MS`. Lets agents bound a hopeless query
+    /// without the server triple-scanning the corpus.
+    #[serde(default = "default_search_budget_ms")]
+    pub budget_ms: u64,
+}
+fn default_search_budget_ms() -> u64 {
+    15_000
 }
 fn default_k() -> usize {
     20
@@ -423,6 +431,18 @@ pub struct DelegateRequest {
 fn default_delegate_budget_ms() -> u64 {
     5000
 }
+
+/// Hard ceiling on `/delegate` wall-time. A misbehaving (or
+/// adversarial) caller cannot disable the guard with an arbitrarily
+/// large `budget_ms`; we silently clamp.
+const MAX_DELEGATE_BUDGET_MS: u64 = 30_000;
+
+/// Hard ceiling on `/search` wall-time. `/search` already runs its
+/// stages with per-stage budgets, but those budgets stack across the
+/// three parallel probes plus AST widening. This is the endpoint-wide
+/// cap so a no-hit pathological query cannot triple corpus IO
+/// indefinitely.
+const MAX_SEARCH_BUDGET_MS: u64 = 30_000;
 
 #[derive(Debug, Serialize)]
 pub struct DelegateFinding {
@@ -475,12 +495,13 @@ pub async fn delegate(
         ast: true,
         response_format: ResponseFormat::Detailed,
     };
-    let budget = std::time::Duration::from_millis(req.budget_ms);
+    let budget_ms = req.budget_ms.min(MAX_DELEGATE_BUDGET_MS);
+    let budget = std::time::Duration::from_millis(budget_ms);
     let raw_spans = match tokio::time::timeout(budget, run_grep(state, &grep_req)).await {
         Ok(r) => r?,
         Err(_) => {
             return Ok(Json(DelegateResponse {
-                summary: format!("budget {}ms exceeded before any results", req.budget_ms),
+                summary: format!("budget {}ms exceeded before any results", budget_ms),
                 findings: vec![],
                 stats: serde_json::json!({"terms": stats_terms, "timeout": true}),
             }));
@@ -534,7 +555,8 @@ pub async fn delegate(
         stats: serde_json::json!({
             "terms": stats_terms,
             "elapsed_ms": elapsed,
-            "budget_ms": req.budget_ms,
+            "budget_ms": budget_ms,
+            "requested_budget_ms": req.budget_ms,
         }),
     }))
 }
@@ -551,6 +573,21 @@ pub async fn search(
     if terms.is_empty() {
         return Ok(Json(GrepResponse::from_spans(Vec::new(), fmt)));
     }
+
+    let budget_ms = req.budget_ms.min(MAX_SEARCH_BUDGET_MS);
+    let budget = std::time::Duration::from_millis(budget_ms);
+    match tokio::time::timeout(budget, search_inner(state, req, terms, fmt)).await {
+        Ok(r) => r,
+        Err(_) => Ok(Json(GrepResponse::from_spans(Vec::new(), fmt))),
+    }
+}
+
+async fn search_inner(
+    state: Arc<AppState>,
+    req: SearchRequest,
+    terms: Vec<String>,
+    fmt: ResponseFormat,
+) -> Result<Json<GrepResponse>, AppError> {
 
     // Fan out *multiple* grep probes in parallel and fuse spans rather
     // than running a single OR-of-terms regex. The model picks one
@@ -970,6 +1007,7 @@ mod tests {
                 query: "find TODO inside beta function".to_string(),
                 k: 5,
                 response_format: ResponseFormat::Detailed,
+                budget_ms: 5_000,
             }),
         )
         .await
