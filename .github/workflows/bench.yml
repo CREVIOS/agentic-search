@@ -1,0 +1,21 @@
+name: bench
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  micro:
+    name: criterion (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo bench
+        run: cargo bench -p bench -- --output-format bencher | tee bench/results/criterion.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: criterion-results
+          path: bench/results/

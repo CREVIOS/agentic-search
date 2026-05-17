@@ -1,0 +1,27 @@
+[package]
+name = "as-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "agentic-search CLI"
+
+[[bin]]
+name = "agentic-search"
+path = "src/main.rs"
+
+[dependencies]
+as-core = { workspace = true }
+as-store = { workspace = true }
+as-fs = { workspace = true }
+as-lex = { workspace = true }
+as-plan = { workspace = true }
+as-server = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+serde_json = { workspace = true }
+axum = { workspace = true }

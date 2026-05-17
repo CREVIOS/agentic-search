@@ -1,0 +1,19 @@
+[package]
+name = "as-fs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Virtual filesystem over as-store: glob, list, read_at"
+
+[dependencies]
+as-core = { workspace = true }
+as-store = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+tracing = { workspace = true }
+globset = "0.4"

@@ -1,0 +1,25 @@
+[package]
+name = "as-lex"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Lexical layer: ripgrep-as-lib + tantivy BM25"
+
+[dependencies]
+as-core = { workspace = true }
+as-store = { workspace = true }
+as-fs = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+tracing = { workspace = true }
+grep-searcher = { workspace = true }
+grep-regex = { workspace = true }
+grep-matcher = { workspace = true }
+tantivy = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

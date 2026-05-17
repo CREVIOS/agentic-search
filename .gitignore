@@ -1,0 +1,50 @@
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+build/
+*.whl
+
+# Node
+node_modules/
+.npm/
+*.tsbuildinfo
+.next/
+.turbo/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Local
+.env
+.env.local
+.envrc
+*.log
+
+# Bench artifacts
+bench/results/*.json
+bench/results/*.png
+bench/results/*.csv
+bench/data/
+!bench/results/.gitkeep
+
+# Generated
+*.index
+*.tantivy/
+*.hnsw
+*.usearch

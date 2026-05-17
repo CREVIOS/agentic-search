@@ -1,0 +1,19 @@
+[package]
+name = "as-vec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Vector layer: fastembed embeddings + HNSW ANN"
+
+[dependencies]
+as-core = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+hnsw_rs = { workspace = true }
+fastembed = { workspace = true }

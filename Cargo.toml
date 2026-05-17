@@ -1,0 +1,107 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/as-core",
+    "crates/as-store",
+    "crates/as-fs",
+    "crates/as-lex",
+    "crates/as-vec",
+    "crates/as-web",
+    "crates/as-rerank",
+    "crates/as-plan",
+    "crates/as-server",
+    "crates/as-cli",
+    "crates/as-bindings-py",
+    "crates/as-bindings-node",
+    "bench",
+]
+
+# Bindings crates require a Python/Node host to link against; exclude them
+# from the default workspace build/test set so a plain `cargo test` works.
+default-members = [
+    "crates/as-core",
+    "crates/as-store",
+    "crates/as-fs",
+    "crates/as-lex",
+    "crates/as-vec",
+    "crates/as-web",
+    "crates/as-rerank",
+    "crates/as-plan",
+    "crates/as-server",
+    "crates/as-cli",
+    "bench",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.78"
+license = "Apache-2.0"
+repository = "https://github.com/claudemakebell/agentic-search"
+homepage = "https://github.com/claudemakebell/agentic-search"
+authors = ["agentic-search contributors"]
+
+[workspace.dependencies]
+# Core
+anyhow = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+bytes = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Storage
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-s3 = "1"
+object_store = { version = "0.11", features = ["aws", "gcp"] }
+
+# Lexical
+grep-searcher = "0.1"
+grep-regex = "0.1"
+grep-matcher = "0.1"
+tantivy = "0.22"
+
+# Vector
+# usearch via FFI bindings; fallback hnsw_rs (pure Rust)
+hnsw_rs = "0.3"
+# fastembed wraps ort/ONNX runtime for embeddings
+fastembed = { version = "4", default-features = false, features = ["ort-download-binaries", "hf-hub"] }
+
+# HTTP / server
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+axum = "0.7"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Bench
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# Internal
+as-core = { path = "crates/as-core" }
+as-store = { path = "crates/as-store" }
+as-fs = { path = "crates/as-fs" }
+as-lex = { path = "crates/as-lex" }
+as-vec = { path = "crates/as-vec" }
+as-web = { path = "crates/as-web" }
+as-rerank = { path = "crates/as-rerank" }
+as-plan = { path = "crates/as-plan" }
+as-server = { path = "crates/as-server" }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+[profile.bench]
+opt-level = 3
+lto = "fat"
+codegen-units = 1

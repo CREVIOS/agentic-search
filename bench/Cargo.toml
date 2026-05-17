@@ -1,0 +1,23 @@
+[package]
+name = "bench"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "agentic-search micro-benchmarks (criterion)"
+publish = false
+
+[[bench]]
+name = "rrf"
+harness = false
+
+[dependencies]
+as-core = { workspace = true }
+as-plan = { workspace = true }
+as-lex = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+serde_json = { workspace = true }

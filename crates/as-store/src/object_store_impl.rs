@@ -1,0 +1,109 @@
+//! `object_store` crate-backed implementation of the `Store` trait.
+//!
+//! Supports `s3://`, `gs://`, `file://` URIs out of the box via the upstream
+//! `object_store` builders. Range-read uses `get_opts` with `GetRange::Bounded`.
+
+use crate::{ObjectMeta as AsObjectMeta, Store};
+use as_core::{Error, Result};
+use async_trait::async_trait;
+use bytes::Bytes;
+use futures::stream::{BoxStream, StreamExt};
+use object_store::{path::Path, GetOptions, GetRange, ObjectStore};
+use std::ops::Range;
+use std::sync::Arc;
+
+pub struct ObjectStoreImpl {
+    inner: Arc<dyn ObjectStore>,
+    bucket_or_root: String,
+}
+
+impl ObjectStoreImpl {
+    pub fn new(inner: Arc<dyn ObjectStore>, bucket_or_root: impl Into<String>) -> Self {
+        Self {
+            inner,
+            bucket_or_root: bucket_or_root.into(),
+        }
+    }
+
+    fn path(&self, key: &str) -> Path {
+        Path::from(key.trim_start_matches('/'))
+    }
+}
+
+#[async_trait]
+impl Store for ObjectStoreImpl {
+    async fn get(&self, key: &str) -> Result<Bytes> {
+        let r = self
+            .inner
+            .get(&self.path(key))
+            .await
+            .map_err(|e| Error::Store(e.to_string()))?;
+        r.bytes().await.map_err(|e| Error::Store(e.to_string()))
+    }
+
+    async fn get_range(&self, key: &str, range: Range<u64>) -> Result<Bytes> {
+        let opts = GetOptions {
+            range: Some(GetRange::Bounded(range.start as usize..range.end as usize)),
+            ..Default::default()
+        };
+        let r = self
+            .inner
+            .get_opts(&self.path(key), opts)
+            .await
+            .map_err(|e| Error::Store(e.to_string()))?;
+        r.bytes().await.map_err(|e| Error::Store(e.to_string()))
+    }
+
+    async fn put(&self, key: &str, data: Bytes) -> Result<()> {
+        self.inner
+            .put(&self.path(key), data.into())
+            .await
+            .map_err(|e| Error::Store(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn delete(&self, key: &str) -> Result<()> {
+        self.inner
+            .delete(&self.path(key))
+            .await
+            .map_err(|e| Error::Store(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn head(&self, key: &str) -> Result<AsObjectMeta> {
+        let m = self
+            .inner
+            .head(&self.path(key))
+            .await
+            .map_err(|e| Error::Store(e.to_string()))?;
+        Ok(AsObjectMeta {
+            key: m.location.to_string(),
+            size: m.size as u64,
+            etag: m.e_tag,
+            last_modified: Some(m.last_modified.timestamp()),
+        })
+    }
+
+    fn list<'a>(&'a self, prefix: &'a str) -> BoxStream<'a, Result<AsObjectMeta>> {
+        let p = Path::from(prefix.trim_start_matches('/'));
+        self.inner
+            .list(Some(&p))
+            .map(|r| {
+                r.map(|m| AsObjectMeta {
+                    key: m.location.to_string(),
+                    size: m.size as u64,
+                    etag: m.e_tag,
+                    last_modified: Some(m.last_modified.timestamp()),
+                })
+                .map_err(|e| Error::Store(e.to_string()))
+            })
+            .boxed()
+    }
+}
+
+/// Root tag (bucket or local root) the store was constructed with.
+impl ObjectStoreImpl {
+    pub fn root(&self) -> &str {
+        &self.bucket_or_root
+    }
+}

@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "langchain-agentic-search"
+version = "0.0.1"
+description = "LangChain Retriever + Tool for agentic-search"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "agentic-search contributors" }]
+dependencies = [
+    "agentic-search>=0.0.1",
+    "langchain-core>=0.3",
+]
