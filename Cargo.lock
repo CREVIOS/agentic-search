@@ -266,7 +266,6 @@ dependencies = [
  "async-trait",
  "bytes",
  "futures",
- "grep-matcher",
  "grep-regex",
  "grep-searcher",
  "serde",

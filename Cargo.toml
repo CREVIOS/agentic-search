@@ -40,19 +40,13 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Storage
-aws-config = { version = "1", features = ["behavior-version-latest"] }
-aws-sdk-s3 = "1"
 object_store = { version = "0.13", features = ["aws", "gcp"] }
 
 # Lexical
 grep-searcher = "0.1"
 grep-regex = "0.1"
-grep-matcher = "0.1"
 
-# Vector
-# usearch via FFI bindings; fallback hnsw_rs (pure Rust)
-hnsw_rs = "0.3"
-# fastembed wraps ort/ONNX runtime for embeddings
+# Vector — fastembed wraps ort/ONNX runtime for embeddings
 fastembed = { version = "4", default-features = false, features = ["ort-download-binaries", "hf-hub"] }
 
 # HTTP / server
