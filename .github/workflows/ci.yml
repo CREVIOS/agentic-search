@@ -36,3 +36,19 @@ jobs:
         run: cargo build --all-targets
       - name: test
         run: cargo test --all-targets
+
+  node:
+    name: Node SDK (pnpm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - name: install
+        run: pnpm install --frozen-lockfile=false
+      - name: build
+        run: pnpm -r build

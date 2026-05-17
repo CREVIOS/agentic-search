@@ -1,7 +1,7 @@
 {
   "name": "@agentic-search/sdk",
   "version": "0.0.1",
-  "description": "Node SDK for agentic-search (hybrid S3 + web search for AI agents)",
+  "description": "Node SDK for agentic-search (S3-native ls/glob/read/grep for AI agents)",
   "license": "Apache-2.0",
   "type": "module",
   "main": "dist/index.js",
@@ -9,10 +9,11 @@
   "files": ["dist/"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "pnpm run build"
   },
-  "engines": { "node": ">=18" },
+  "engines": { "node": ">=20", "pnpm": ">=10" },
+  "packageManager": "pnpm@10.30.3",
   "devDependencies": {
-    "typescript": "^5.5.0"
+    "typescript": "^5.6.0"
   }
 }

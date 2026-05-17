@@ -1,0 +1,10 @@
+{
+  "name": "agentic-search-monorepo",
+  "private": true,
+  "packageManager": "pnpm@10.30.3",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test"
+  },
+  "engines": { "node": ">=20", "pnpm": ">=10" }
+}

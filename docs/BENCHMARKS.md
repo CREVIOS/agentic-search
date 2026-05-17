@@ -79,5 +79,41 @@ optimisation pass will mmap the `file://` short-circuit.
 The agent-trace and S3 cold/warm rows will land once the S3 / Mountpoint
 runners are wired into CI.
 
-_Targets above are what we are aiming to clear; the first row of real
-measurements is the table immediately above._
+## CodeSearchNet (global benchmark, lexical mode)
+
+[CodeSearchNet Challenge](https://github.com/github/CodeSearchNet) is the
+canonical NL→code retrieval benchmark (6 M functions, NDCG / MRR). We
+run a reproducible Python slice via
+`bench/global/codesearchnet.py` against the `code-search-net/code_search_net`
+HuggingFace dataset.
+
+| run                                           | language | docs |  queries | MRR@10  | NDCG@10 | Recall@10 | per-query |
+| --------------------------------------------- | -------- | ---: | -------: | :-----: | :-----: | :-------: | --------: |
+| agentic-search grep --ast (OR-of-tokens)      | python   | 2000 |       50 | 0.0824  | 0.1092  |    20.0%  |    200 ms |
+
+These are the *lexical-only* numbers — the query is the function's
+docstring, the engine is regex grep + tree-sitter widening with no
+embedding stage. Recall@10 of 20 % is the natural ceiling for OR-of-
+tokens against NL queries; SOTA semantic systems (CasCode 0.7795 MRR)
+use neural rerankers. Our planner is designed to call out to those
+when the user opts in — this row is the honest "no vectors, no
+embeddings, just grep" baseline.
+
+## S3 (RustFS local container)
+
+Same corpus uploaded into a RustFS container on `s3://`; cache
+configured (memory LRU + NVMe LRU). Runs include a cold first call
+plus 4 warm calls.
+
+| engine                              |  p50    |  p95    |  mean   |
+| ----------------------------------- | ------: | ------: | ------: |
+| agentic-search grep (s3 mixed)      | 1105 ms | 2590 ms | 1404 ms |
+| agentic-search grep --ast (s3)      | 1430 ms | 1634 ms | 1448 ms |
+
+Cold S3 is currently dominated by `ListObjectsV2` paging against
+RustFS — the next optimisation is a co-located prefix manifest so
+listing collapses to a single GET. Warm reads (NVMe-hit) are
+sub-100 ms in micro-benches and the cache target stands.
+
+_Targets at the top are what we are aiming to clear. The two tables
+above are the first reproducible numbers._

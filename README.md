@@ -59,6 +59,20 @@ in. M1 (`as-store` + `as-fs` + CLI verbs) is up next. See
 [`docs/RESEARCH.md`](docs/RESEARCH.md) for why the plan looks the way it
 does.
 
+## Install probe / Node SDK with `pnpm`
+
+```bash
+# install pnpm if you don't have it yet
+corepack enable && corepack use pnpm@10
+
+# install Probe (one of the engines we benchmark against)
+pnpm add -g @probelabs/probe
+
+# build the Node SDK in this repo
+pnpm install
+pnpm -r build
+```
+
 ## Quickstart (target shape — wiring in progress)
 
 ```bash
