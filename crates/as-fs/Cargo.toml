@@ -22,3 +22,6 @@ globset = "0.4"
 as-store = { workspace = true }
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+flate2 = "1"
+serde_json = { workspace = true }
+bytes = { workspace = true }

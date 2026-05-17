@@ -360,6 +360,14 @@ pub fn widen_with_cache_cancellable(
     spans: &mut [Span],
     cancelled: &dyn Fn() -> bool,
 ) -> Result<()> {
+    // Pre-check: a cancel signal that fires while the caller is
+    // waiting for the spawn_blocking slot should bail before we run
+    // the parse. `ContainerIndex::build` can take 100s of ms on a
+    // large file and is *not* internally interruptible, so this is
+    // the only cheap point at which we can honour a late cancel.
+    if cancelled() {
+        return Ok(());
+    }
     let Some(first) = spans.first() else {
         return Ok(());
     };

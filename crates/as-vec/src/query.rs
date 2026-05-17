@@ -27,9 +27,13 @@ pub struct VecHit {
 }
 
 /// Process-local cap on how many cluster files we keep decoded in
-/// memory. Tunable later via `VecIndex::with_capacity`; the default
-/// covers all-clusters-warm for the index sizes we ship with.
-pub const DEFAULT_CLUSTER_CACHE: usize = 4096;
+/// memory. Each cached cluster is a decoded `Vec<ClusterRecord>` whose
+/// size is ~`cluster_size * dim * 4` bytes. With the BGE-small-en
+/// default (`dim=384`) and ~5k docs per cluster, one cluster sits
+/// around 7 MB, so 256 clusters caps the in-process working set at
+/// roughly 1.8 GB worst-case. Tune up if you have abundant RAM, down
+/// if you don't.
+pub const DEFAULT_CLUSTER_CACHE: usize = 256;
 
 pub struct VecIndex {
     pub store: ArcStore,

@@ -23,6 +23,12 @@ struct ManifestStreamState {
     pending: Option<as_store::manifest::ManifestEntry>,
     yielded: usize,
     expected: usize,
+    /// Sticky terminator. Once the underlying iterator hits EOF (or
+    /// errors) we set this so the unfold never re-polls — a single
+    /// truncation error is yielded *once*, then the stream ends.
+    /// Without this, the truncation path repeats forever because
+    /// `next_entry` returns `Ok(None)` indefinitely after EOF.
+    done: bool,
 }
 
 impl Fs {
@@ -94,8 +100,12 @@ impl Fs {
                     pending: first,
                     yielded: 0,
                     expected,
+                    done: false,
                 };
                 let stream = futures::stream::unfold(state, |mut s| async move {
+                    if s.done {
+                        return None;
+                    }
                     if let Some(p) = s.pending.take() {
                         s.yielded += 1;
                         return Some((Ok(p.to_object_meta()), s));
@@ -107,6 +117,7 @@ impl Fs {
                         }
                         Ok(None) => {
                             if s.expected > 0 && s.yielded < s.expected {
+                                s.done = true;
                                 let err = Error::Other(format!(
                                     "manifest truncated: yielded {} of {} entries",
                                     s.yielded, s.expected
@@ -116,7 +127,10 @@ impl Fs {
                                 None
                             }
                         }
-                        Err(e) => Some((Err(e), s)),
+                        Err(e) => {
+                            s.done = true;
+                            Some((Err(e), s))
+                        }
                     }
                 });
                 Ok(stream.boxed())
@@ -151,5 +165,59 @@ impl Fs {
                 async move { matches }
             })
             .boxed())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::StreamExt;
+
+    /// A consumer that "logs and continues" (the as-grep pattern) must
+    /// finish in bounded time even when the manifest is truncated.
+    /// Before the `done` sticky flag was added, an EOF below the
+    /// expected count yielded `Err` forever and the loop never
+    /// terminated.
+    #[tokio::test]
+    async fn truncated_manifest_stream_terminates() {
+        use bytes::Bytes;
+        use std::io::Write;
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let uri = format!("file://{}", dir.path().display());
+        let (store, _) = as_store::open(&uri).unwrap();
+
+        // Build a fake manifest gzipped JSONL that claims count=10
+        // but only carries 2 body entries.
+        let header = serde_json::json!({
+            "v": 1, "prefix": "docs", "generated_at": 0, "count": 10
+        });
+        let entry1 = serde_json::json!({"key": "docs/a.md", "size": 1});
+        let entry2 = serde_json::json!({"key": "docs/b.md", "size": 1});
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        writeln!(gz, "{header}").unwrap();
+        writeln!(gz, "{entry1}").unwrap();
+        writeln!(gz, "{entry2}").unwrap();
+        let bytes = gz.finish().unwrap();
+        store
+            .put("docs/.agentic-search/manifest.jsonl.gz", Bytes::from(bytes))
+            .await
+            .unwrap();
+
+        let fs = Fs::new(store);
+        let mut stream = fs.list_with_manifest("docs").await.unwrap();
+        let mut oks = 0usize;
+        let mut errs = 0usize;
+        let mut polls = 0usize;
+        while let Some(item) = stream.next().await {
+            polls += 1;
+            assert!(polls < 1_000, "stream did not terminate; polls={polls}");
+            match item {
+                Ok(_) => oks += 1,
+                Err(_) => errs += 1,
+            }
+        }
+        assert_eq!(oks, 2, "should yield both real entries");
+        assert_eq!(errs, 1, "should yield exactly one truncation error");
     }
 }
