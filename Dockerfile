@@ -28,9 +28,17 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY bench ./bench
 # Pre-fetch + build all deps for the binary we ship.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/src/target \
+ARG TARGETOS
+ARG TARGETARCH
+# Per-platform cache mounts. Without `id=…-${TARGETARCH}` the
+# `linux/amd64` and `linux/arm64` legs of a multi-arch buildx run
+# would share one `/src/target` slot (BuildKit defaults to
+# `id=target,sharing=shared`), letting them clobber each other's
+# native artifacts. `sharing=locked` serialises within a single
+# platform so we still cache across builds.
+RUN --mount=type=cache,id=cargo-registry-${TARGETOS}-${TARGETARCH},target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=cargo-git-${TARGETOS}-${TARGETARCH},target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,id=cargo-target-${TARGETOS}-${TARGETARCH},target=/src/target,sharing=locked \
     cargo build --release --locked -p as-cli && \
     cp target/release/agentic-search /usr/local/bin/agentic-search
 

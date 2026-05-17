@@ -34,11 +34,16 @@ pub fn rrf(lists: &[Vec<Span>], k: usize, top_k: usize) -> Vec<Span> {
     }
     let mut out: Vec<(f32, Span)> = acc.into_values().collect();
     // `total_cmp` gives a total ordering across NaN; fall back to the
-    // span's `dedup_key` so ties resolve deterministically across runs
-    // instead of inheriting HashMap iteration order.
+    // span's natural ordering tuple so ties resolve deterministically
+    // across runs instead of inheriting HashMap iteration order.
+    // Sorting by `(uri, byte_range.start, byte_range.end)` puts spans
+    // in document order on ties — the formatted `dedup_key()` would
+    // have sorted byte ranges as *strings* ("100-…" before "20-…").
     out.sort_by(|a, b| {
         b.0.total_cmp(&a.0)
-            .then_with(|| a.1.dedup_key().cmp(&b.1.dedup_key()))
+            .then_with(|| a.1.uri.cmp(&b.1.uri))
+            .then_with(|| a.1.byte_range.start.cmp(&b.1.byte_range.start))
+            .then_with(|| a.1.byte_range.end.cmp(&b.1.byte_range.end))
     });
     out.into_iter()
         .take(top_k)
@@ -305,6 +310,30 @@ mod tests {
             score,
             ..Span::default()
         }
+    }
+
+    fn span_with_range(uri: &str, start: u64, end: u64) -> Span {
+        Span {
+            uri: uri.into(),
+            byte_range: start..end,
+            line_range: [1, 1],
+            kind: SpanKind::Line,
+            score: 0.0,
+            ..Span::default()
+        }
+    }
+
+    #[test]
+    fn rrf_tiebreak_orders_byte_ranges_numerically() {
+        // Two single-item lists, same URI, ranges 20 and 100. Tied
+        // fused score → tiebreak runs. The right answer is range 20
+        // before range 100 (document order). A string sort would put
+        // "100-…" before "20-…" because '1' < '2'.
+        let a = vec![span_with_range("doc.md", 100, 110)];
+        let b = vec![span_with_range("doc.md", 20, 30)];
+        let r = rrf(&[a, b], 60, 4);
+        assert_eq!(r[0].byte_range.start, 20, "got {:?}", r);
+        assert_eq!(r[1].byte_range.start, 100, "got {:?}", r);
     }
 
     #[test]
