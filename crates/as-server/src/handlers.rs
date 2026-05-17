@@ -282,8 +282,17 @@ pub async fn find(
     State(state): State<Arc<AppState>>,
     Json(req): Json<FindRequest>,
 ) -> Result<Json<GrepResponse>, AppError> {
-    let pattern = format!(r"\b{}\b", regex_escape(&req.symbol));
-    let symbol = req.symbol.clone();
+    // Expand the requested symbol across the common naming conventions
+    // (camelCase, snake_case, kebab-case, SCREAMING_SNAKE_CASE, PascalCase)
+    // so `/find foo_bar` also picks up `fooBar` and `FOO_BAR`. The
+    // grep stage runs on the alternation; the AST post-filter keeps
+    // only spans whose tree-sitter name field is one of the variants.
+    let variants = symbol_case_variants(&req.symbol);
+    let pattern = variants
+        .iter()
+        .map(|v| format!(r"\b{}\b", regex_escape(v)))
+        .collect::<Vec<_>>()
+        .join("|");
     let fmt = req.response_format;
     let grep_req = GrepRequest {
         uri: req.uri,
@@ -297,12 +306,80 @@ pub async fn find(
         response_format: ResponseFormat::Detailed,
     };
     let mut spans = run_grep(state, &grep_req).await?;
-    // Only keep AST-widened spans whose tree-sitter name field matches the
-    // exact requested symbol. This drops comment / string / call-site hits
-    // that grep alone surfaces.
-    spans.retain(|s| s.symbol.as_deref() == Some(symbol.as_str()));
+    let variant_set: std::collections::HashSet<&str> =
+        variants.iter().map(|s| s.as_str()).collect();
+    // Only keep AST-widened spans whose tree-sitter name field matches
+    // any variant of the requested symbol. Drops comment / string /
+    // call-site hits that grep alone surfaces.
+    spans.retain(|s| {
+        s.symbol
+            .as_deref()
+            .map(|sym| variant_set.contains(sym))
+            .unwrap_or(false)
+    });
     spans.truncate(req.max_hits);
     Ok(Json(GrepResponse::from_spans(spans, fmt)))
+}
+
+/// Expand a symbol name into every common code-style variant so the
+/// grep stage finds matches regardless of how the codebase spells it.
+/// Returns the original *plus* the variants, deduplicated, in stable
+/// order. Trivial / one-char names short-circuit to just themselves.
+pub(crate) fn symbol_case_variants(symbol: &str) -> Vec<String> {
+    if symbol.chars().count() < 2 {
+        return vec![symbol.to_string()];
+    }
+    // 1. Split into lowercase word tokens regardless of input casing.
+    let mut words: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let push_cur = |cur: &mut String, words: &mut Vec<String>| {
+        if !cur.is_empty() {
+            words.push(std::mem::take(cur).to_ascii_lowercase());
+        }
+    };
+    let mut prev: Option<char> = None;
+    for c in symbol.chars() {
+        if c == '_' || c == '-' || c == '.' || c == ':' {
+            push_cur(&mut cur, &mut words);
+            prev = None;
+            continue;
+        }
+        // Camel/Pascal boundary: lower-or-digit followed by uppercase.
+        if let Some(p) = prev {
+            if (p.is_ascii_lowercase() || p.is_ascii_digit()) && c.is_ascii_uppercase() {
+                push_cur(&mut cur, &mut words);
+            }
+        }
+        cur.push(c);
+        prev = Some(c);
+    }
+    push_cur(&mut cur, &mut words);
+    if words.is_empty() {
+        return vec![symbol.to_string()];
+    }
+    // Helper to title-case a single ASCII word.
+    let title = |w: &str| -> String {
+        let mut chars = w.chars();
+        match chars.next() {
+            None => String::new(),
+            Some(c) => c.to_ascii_uppercase().to_string() + chars.as_str(),
+        }
+    };
+    let snake = words.join("_");
+    let kebab = words.join("-");
+    let scream = snake.to_ascii_uppercase();
+    let pascal: String = words.iter().map(|w| title(w)).collect();
+    let camel = {
+        let mut it = words.iter();
+        let first = it.next().cloned().unwrap_or_default();
+        let rest: String = it.map(|w| title(w)).collect();
+        first + &rest
+    };
+    let mut out: Vec<String> = vec![symbol.to_string(), snake, kebab, scream, camel, pascal];
+    // De-dup preserving order.
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|v| !v.is_empty() && seen.insert(v.clone()));
+    out
 }
 
 /// `/search` is the planner-fronted endpoint. v1 implements it as grep+AST
@@ -764,6 +841,35 @@ mod tests {
     use super::*;
     use std::{fs, sync::Arc};
     use tempfile::tempdir;
+
+    #[test]
+    fn symbol_case_variants_cover_common_styles() {
+        let v = symbol_case_variants("fooBar");
+        for want in ["fooBar", "FooBar", "foo_bar", "FOO_BAR", "foo-bar"] {
+            assert!(v.contains(&want.to_string()), "missing {want}: {v:?}");
+        }
+    }
+
+    #[test]
+    fn symbol_case_variants_dedup_when_input_is_lowercase() {
+        let v = symbol_case_variants("get");
+        // single-word input collapses all styles to "get" / "Get" / "GET".
+        assert!(v.contains(&"get".to_string()));
+        assert!(v.contains(&"Get".to_string()));
+        assert!(v.contains(&"GET".to_string()));
+        // no duplicates
+        let mut sorted = v.clone();
+        sorted.sort();
+        let mut deduped = sorted.clone();
+        deduped.dedup();
+        assert_eq!(sorted, deduped);
+    }
+
+    #[test]
+    fn symbol_case_variants_handles_short_identifier() {
+        let v = symbol_case_variants("x");
+        assert_eq!(v, vec!["x".to_string()]);
+    }
 
     #[tokio::test]
     async fn search_tokenizes_and_ranks_natural_language_query() {
