@@ -14,7 +14,7 @@
 //! HEAD before serving cached bytes. `put` and `delete` evict every cached
 //! full/range entry for that key in the current process.
 
-use as_core::{Error, Result};
+use as_core::Result;
 use as_store::{ArcStore, ObjectMeta, Store};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -387,13 +387,6 @@ impl Store for Tiered {
 /// Helper: wrap any store in a `Tiered` cache.
 pub fn wrap(upstream: ArcStore, cfg: TierConfig) -> ArcStore {
     Arc::new(Tiered::new(upstream, cfg))
-}
-
-/// Tiny RAII helper that prevents the impossible-to-hit "Error::Other"
-/// warning when other compile units pull only part of the type set.
-#[doc(hidden)]
-pub fn _ensure_error() -> Result<()> {
-    Err(Error::Other("unreachable".into()))
 }
 
 #[cfg(test)]

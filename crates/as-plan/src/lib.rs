@@ -9,7 +9,6 @@ use as_core::Result;
 use as_embed::{Embedder, Model};
 use as_fs::Fs;
 use as_grep::{GrepOpts, ParallelGrep, ParallelOpts, RankSignals, SourceStage, Span, SpanKind};
-use as_store::ArcStore;
 use as_vec::query::{VecHit, VecIndex};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -76,7 +75,6 @@ pub struct PlanInputs<'a> {
     pub grep_concurrency: usize,
     pub vec_index: Option<&'a VecIndex>,
     pub vec_probe: usize,
-    pub vec_store: Option<ArcStore>,
     /// Per-stage wall-time budget. A stage that misses its deadline is
     /// dropped with a `dropped: true` entry in `PlanResult::stages`
     /// rather than failing the whole call.
@@ -342,7 +340,6 @@ mod tests {
             grep_concurrency: 4,
             vec_index: None,
             vec_probe: 1,
-            vec_store: None,
             budgets: StageBudgets {
                 grep: std::time::Duration::from_nanos(1),
                 vector: std::time::Duration::from_secs(1),

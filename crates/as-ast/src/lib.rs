@@ -44,19 +44,11 @@ pub fn language_for_uri(uri: &str) -> Option<LangSpec> {
                 "enum_item",
                 "mod_item",
             ],
-            name_kinds: &[
-                "function_item",
-                "impl_item",
-                "struct_item",
-                "enum_item",
-                "mod_item",
-            ],
         }),
         "py" | "pyi" => Some(LangSpec {
             id: "python",
             language: tree_sitter_python::LANGUAGE.into(),
             container_kinds: &["function_definition", "class_definition"],
-            name_kinds: &["function_definition", "class_definition"],
         }),
         "js" | "jsx" | "mjs" | "cjs" => Some(LangSpec {
             id: "javascript",
@@ -67,11 +59,6 @@ pub fn language_for_uri(uri: &str) -> Option<LangSpec> {
                 "class_declaration",
                 "arrow_function",
                 "function",
-            ],
-            name_kinds: &[
-                "function_declaration",
-                "method_definition",
-                "class_declaration",
             ],
         }),
         "ts" => Some(LangSpec {
@@ -86,13 +73,6 @@ pub fn language_for_uri(uri: &str) -> Option<LangSpec> {
                 "arrow_function",
                 "function",
             ],
-            name_kinds: &[
-                "function_declaration",
-                "method_definition",
-                "class_declaration",
-                "interface_declaration",
-                "type_alias_declaration",
-            ],
         }),
         "tsx" => Some(LangSpec {
             id: "tsx",
@@ -104,21 +84,11 @@ pub fn language_for_uri(uri: &str) -> Option<LangSpec> {
                 "arrow_function",
                 "function",
             ],
-            name_kinds: &[
-                "function_declaration",
-                "method_definition",
-                "class_declaration",
-            ],
         }),
         "go" => Some(LangSpec {
             id: "go",
             language: tree_sitter_go::LANGUAGE.into(),
             container_kinds: &[
-                "function_declaration",
-                "method_declaration",
-                "type_declaration",
-            ],
-            name_kinds: &[
                 "function_declaration",
                 "method_declaration",
                 "type_declaration",
@@ -133,7 +103,6 @@ pub struct LangSpec {
     pub id: &'static str,
     pub language: Language,
     pub container_kinds: &'static [&'static str],
-    pub name_kinds: &'static [&'static str],
 }
 
 /// One container (function / class / method / module) discovered by

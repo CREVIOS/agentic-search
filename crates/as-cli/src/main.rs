@@ -1,6 +1,6 @@
 use as_ast::{widen_with_cache, SpanCache};
 use as_fs::Fs;
-use as_grep::{grep_bytes_spans, GrepOpts, ParallelGrep, ParallelOpts, Span};
+use as_grep::{GrepOpts, ParallelGrep, ParallelOpts, Span};
 use clap::{Parser, Subcommand};
 use futures::stream::StreamExt;
 use std::sync::Arc;
@@ -93,11 +93,21 @@ enum Cmd {
     },
     /// Serve the HTTP + MCP API.
     Serve {
-        #[arg(long, default_value = "0.0.0.0:8787")]
+        /// Bind address. Defaults to loopback only — the server has no
+        /// authentication and accepts caller-supplied `file://` and
+        /// cloud URIs, so a public bind is an SSRF vector unless the
+        /// host has its own auth in front. Set `--allow-public` to
+        /// opt out and bind a non-loopback address.
+        #[arg(long, default_value = "127.0.0.1:8787")]
         bind: String,
         /// Speak MCP on stdio instead of HTTP.
         #[arg(long)]
         mcp: bool,
+        /// Allow binding a non-loopback address (e.g. `0.0.0.0:8787`).
+        /// You must mount your own auth (reverse proxy, mTLS, IAP, …)
+        /// before exposing the API publicly.
+        #[arg(long)]
+        allow_public: bool,
     },
     /// Run benchmarks (M6+).
     Bench {
@@ -267,6 +277,15 @@ fn print_spans(spans: &[Span]) {
     }
 }
 
+fn is_loopback_bind(bind: &str) -> bool {
+    // Strip optional `[…]` IPv6 brackets + port.
+    let host = match bind.rsplit_once(':') {
+        Some((h, _)) => h.trim_start_matches('[').trim_end_matches(']'),
+        None => bind,
+    };
+    matches!(host, "127.0.0.1" | "::1" | "localhost" | "")
+}
+
 fn regex_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -420,7 +439,6 @@ async fn cmd_query(
         grep_concurrency: 32,
         vec_index: vec_index.as_ref(),
         vec_probe: probe,
-        vec_store: None,
         budgets: as_plan::StageBudgets::default(),
     };
     let spans = Planner::search(plan).await?;
@@ -473,10 +491,26 @@ async fn main() -> anyhow::Result<()> {
             k,
             probe,
         } => cmd_query(uri, namespace, query, k, probe).await?,
-        Cmd::Serve { bind, mcp } => {
+        Cmd::Serve {
+            bind,
+            mcp,
+            allow_public,
+        } => {
             if mcp {
                 as_server::mcp_stdio::run().await?;
             } else {
+                // Refuse to bind a non-loopback address without
+                // `--allow-public`. The server has no built-in auth
+                // and accepts caller-supplied `file://` + cloud URIs,
+                // so a public bind would let any reachable peer pull
+                // whatever the process can. The opt-out is explicit so
+                // operators have to acknowledge they put auth in front.
+                if !allow_public && !is_loopback_bind(&bind) {
+                    anyhow::bail!(
+                        "refusing to bind non-loopback address {bind:?} without --allow-public; \
+                         mount auth (reverse proxy, mTLS, IAP, …) in front before exposing the API."
+                    );
+                }
                 let app = as_server::router();
                 let listener = tokio::net::TcpListener::bind(&bind).await?;
                 tracing::info!(%bind, "serving");
@@ -489,12 +523,4 @@ async fn main() -> anyhow::Result<()> {
         Cmd::IndexManifest { uri } => cmd_index_manifest(uri).await?,
     }
     Ok(())
-}
-
-// Re-export so the old `grep_bytes` and `grep_bytes_spans` names compile if any
-// internal caller still uses them; the CLI itself uses `grep_bytes_spans`
-// directly via `ParallelGrep`.
-#[allow(dead_code)]
-fn _ensure_grep_helpers(uri: &str, bytes: &[u8], pat: &str) {
-    let _ = grep_bytes_spans(uri, bytes, pat, &GrepOpts::default());
 }

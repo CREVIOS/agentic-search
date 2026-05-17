@@ -98,17 +98,34 @@ pub fn open(uri: &str) -> Result<(ArcStore, String)> {
     match parsed.scheme.as_str() {
         "file" => {
             let path = PathBuf::from(&parsed.key);
-            let root = if path.is_absolute() {
+            let abs = if path.is_absolute() {
                 path
             } else {
                 std::env::current_dir()
                     .map_err(Error::Io)?
                     .join(&parsed.key)
             };
-            // Local files take the mmap fast path: avoids tokio FS
-            // buffering for grep-style workloads.
+            // `file://` can point at either a directory (corpus root)
+            // or a single file. If it's a file we mount the *parent*
+            // as the store root and return the basename as the key, so
+            // `/read file:///tmp/a.txt` works the same shape as
+            // `/read s3://bucket/key`.
+            let (root, key) = match std::fs::metadata(&abs) {
+                Ok(meta) if meta.is_file() => {
+                    let parent = abs
+                        .parent()
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_else(|| PathBuf::from("/"));
+                    let name = abs
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    (parent, name)
+                }
+                _ => (abs, String::new()),
+            };
             let store = LocalMmapStore::new(&root)?;
-            Ok((Arc::new(store), String::new()))
+            Ok((Arc::new(store), key))
         }
         "s3" | "r2" => {
             let bucket = parsed
@@ -189,5 +206,22 @@ mod tests {
     #[test]
     fn parse_bad() {
         assert!(parse_uri("nope").is_err());
+    }
+
+    #[tokio::test]
+    async fn file_uri_pointing_at_single_file_reads_that_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("doc.txt");
+        std::fs::write(&file_path, b"hello agentic").unwrap();
+        let uri = format!("file://{}", file_path.display());
+        let (store, key) = open(&uri).expect("open single-file uri");
+        assert_eq!(key, "doc.txt", "key should be the basename");
+        let bytes = store.get(&key).await.expect("read single file");
+        assert_eq!(bytes.as_ref(), b"hello agentic");
+        // file://<dir> should still mount the directory and return an
+        // empty prefix.
+        let dir_uri = format!("file://{}", dir.path().display());
+        let (_, prefix) = open(&dir_uri).unwrap();
+        assert!(prefix.is_empty());
     }
 }

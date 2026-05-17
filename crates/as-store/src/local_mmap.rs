@@ -85,24 +85,29 @@ impl LocalMmapStore {
     }
 }
 
-fn mmap_file(path: &Path) -> Result<Mmap> {
+fn mmap_file(path: &Path) -> Result<Option<Mmap>> {
     let f = File::open(path).map_err(Error::Io)?;
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    // `Mmap::map` errors on zero-length files; treat them as "empty"
+    // so a single empty file in a corpus does not poison a whole
+    // prefix scan.
+    if len == 0 {
+        return Ok(None);
+    }
     // SAFETY: tree-sitter / ripgrep already required immutable file
     // contents; we open read-only and only use the mapping until the
     // task finishes. Concurrent external writes can in theory cause
     // SIGBUS, which is the same risk every mmap-based grep has.
-    unsafe { Mmap::map(&f) }.map_err(Error::Io)
+    unsafe { Mmap::map(&f) }.map(Some).map_err(Error::Io)
 }
 
 #[async_trait]
 impl Store for LocalMmapStore {
     async fn get(&self, key: &str) -> Result<Bytes> {
         let path = self.safe_path(key)?;
-        tokio::task::spawn_blocking(move || {
-            let mmap = mmap_file(&path)?;
-            // `Bytes::from_owner` (bytes 1.7+) keeps the mmap alive for
-            // the lifetime of the returned `Bytes` without copying.
-            Ok::<_, Error>(Bytes::from_owner(MmapBuf(mmap)))
+        tokio::task::spawn_blocking(move || match mmap_file(&path)? {
+            Some(mmap) => Ok::<_, Error>(Bytes::from_owner(MmapBuf(mmap))),
+            None => Ok(Bytes::new()),
         })
         .await
         .map_err(|e| Error::Other(format!("join: {e}")))?
@@ -110,14 +115,14 @@ impl Store for LocalMmapStore {
 
     async fn get_range(&self, key: &str, range: Range<u64>) -> Result<Bytes> {
         let path = self.safe_path(key)?;
-        tokio::task::spawn_blocking(move || {
-            let mmap = mmap_file(&path)?;
-            let end = (range.end as usize).min(mmap.len());
-            let start = (range.start as usize).min(end);
-            // Slice via Bytes::from_owner + slice() so we still avoid
-            // copying. The mmap stays alive via the owner handle.
-            let bytes = Bytes::from_owner(MmapBuf(mmap));
-            Ok::<_, Error>(bytes.slice(start..end))
+        tokio::task::spawn_blocking(move || match mmap_file(&path)? {
+            Some(mmap) => {
+                let end = (range.end as usize).min(mmap.len());
+                let start = (range.start as usize).min(end);
+                let bytes = Bytes::from_owner(MmapBuf(mmap));
+                Ok::<_, Error>(bytes.slice(start..end))
+            }
+            None => Ok(Bytes::new()),
         })
         .await
         .map_err(|e| Error::Other(format!("join: {e}")))?
@@ -226,5 +231,16 @@ mod tests {
         let store = LocalMmapStore::new(dir.path()).unwrap();
         let err = store.get("../etc/passwd").await.unwrap_err();
         assert!(err.to_string().contains("escape"), "got {err}");
+    }
+
+    #[tokio::test]
+    async fn zero_byte_file_reads_empty() {
+        let dir = tempdir().unwrap();
+        let store = LocalMmapStore::new(dir.path()).unwrap();
+        store.put("empty.txt", Bytes::new()).await.unwrap();
+        let bytes = store.get("empty.txt").await.unwrap();
+        assert!(bytes.is_empty());
+        let range = store.get_range("empty.txt", 0..0).await.unwrap();
+        assert!(range.is_empty());
     }
 }

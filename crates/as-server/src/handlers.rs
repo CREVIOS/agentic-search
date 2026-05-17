@@ -522,13 +522,16 @@ async fn widen_spans(
     for s in spans {
         by_uri.entry(s.uri.clone()).or_default().push(s);
     }
-    let mut pending = futures::stream::FuturesUnordered::new();
+    // `JoinSet` drops abort the spawned tasks. The caller can wrap this
+    // future in a timeout and the AST reads + tree-sitter walks stop
+    // immediately instead of detaching into background CPU/IO leaks.
+    let mut pending: tokio::task::JoinSet<anyhow::Result<Vec<Span>>> = tokio::task::JoinSet::new();
     let mut out: Vec<Span> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     for (uri, group) in by_uri {
         let fs = fs.clone();
         let cache = ast_cache.clone();
-        pending.push(tokio::spawn(async move {
+        pending.spawn(async move {
             let bytes = fs.read(&uri).await?;
             tokio::task::spawn_blocking(move || {
                 let mut group = group;
@@ -537,7 +540,7 @@ async fn widen_spans(
             })
             .await
             .map_err(|e| anyhow::anyhow!("ast join: {e}"))?
-        }));
+        });
         if pending.len() >= 16 {
             drain_widened(&mut pending, &mut out, &mut seen).await?;
         }
@@ -555,13 +558,11 @@ async fn widen_spans(
 }
 
 async fn drain_widened(
-    pending: &mut futures::stream::FuturesUnordered<
-        tokio::task::JoinHandle<anyhow::Result<Vec<Span>>>,
-    >,
+    pending: &mut tokio::task::JoinSet<anyhow::Result<Vec<Span>>>,
     out: &mut Vec<Span>,
     seen: &mut std::collections::HashSet<String>,
 ) -> anyhow::Result<()> {
-    if let Some(joined) = pending.next().await {
+    if let Some(joined) = pending.join_next().await {
         let group = joined.map_err(|e| anyhow::anyhow!("widen task join: {e}"))??;
         for s in group {
             if seen.insert(s.dedup_key()) {
