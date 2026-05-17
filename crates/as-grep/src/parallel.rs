@@ -49,7 +49,19 @@ impl ParallelGrep {
         pattern: &str,
         opts: &ParallelOpts,
     ) -> Result<Vec<Span>> {
-        let mut listing = self.fs.list(prefix);
+        // Use the prefix manifest when one is present at
+        // `<prefix>/.agentic-search/manifest.jsonl.gz`; otherwise fall
+        // back to live `list`. On S3 this collapses paged
+        // ListObjectsV2 to a single GET. Failure to read the manifest
+        // is treated as "no manifest" — `list_with_manifest` itself
+        // returns the live listing in that case.
+        let mut listing = match self.fs.list_with_manifest(prefix).await {
+            Ok(stream) => stream,
+            Err(e) => {
+                tracing::warn!(error = %e, "manifest read failed, falling back to live list");
+                self.fs.list(prefix)
+            }
+        };
         // Using `JoinSet` so that when `scan_prefix` returns early (cap
         // reached, error, planner dropped the future) every spawned task
         // is aborted automatically. Previously we used `FuturesUnordered`

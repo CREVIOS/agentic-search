@@ -236,6 +236,13 @@ pub async fn grep(
     Ok(Json(GrepResponse::from_spans(spans, fmt)))
 }
 
+/// Caps for request-body numbers so a single client can't trigger
+/// runaway concurrency or memory just by sending big integers. The
+/// cap is generous (covers every realistic agent workload) but
+/// finite — these are the public limits we will document.
+const MAX_CONCURRENCY: usize = 256;
+const MAX_HITS_CAP: usize = 5_000;
+
 /// Internal helper so other handlers can reuse the grep + AST stage
 /// without re-encoding into the public envelope.
 async fn run_grep(state: Arc<AppState>, req: &GrepRequest) -> Result<Vec<Span>, AppError> {
@@ -246,9 +253,9 @@ async fn run_grep(state: Arc<AppState>, req: &GrepRequest) -> Result<Vec<Span>, 
             multi_line: false,
             max_hits_per_file: None,
         },
-        concurrency: req.concurrency,
+        concurrency: req.concurrency.clamp(1, MAX_CONCURRENCY),
         max_object_bytes: 64 * 1024 * 1024,
-        max_total_spans: Some(req.max_hits),
+        max_total_spans: Some(req.max_hits.clamp(1, MAX_HITS_CAP)),
     };
     let pg = ParallelGrep::new(fs.clone());
     let spans = pg.scan_prefix(&prefix, &req.pattern, &opts).await?;
@@ -574,7 +581,7 @@ async fn drain_widened(
 }
 
 fn query_terms(query: &str) -> Vec<String> {
-    use std::collections::BTreeSet;
+    use std::collections::HashSet;
     let raw: Vec<String> = query
         .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '-'))
         .filter_map(|t| {
@@ -582,19 +589,33 @@ fn query_terms(query: &str) -> Vec<String> {
             (t.len() >= 2).then_some(t)
         })
         .collect();
-    let mut filtered = BTreeSet::new();
+    // Preserve query order: the first non-stopword in the query is the
+    // model's intent anchor (used by the "first-term" probe in
+    // `/search`); alphabetically sorting via BTreeSet threw that away.
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut filtered: Vec<String> = Vec::new();
     for t in &raw {
-        if !is_stopword(t) {
-            filtered.insert(t.clone());
+        if is_stopword(t) {
+            continue;
+        }
+        if seen.insert(t.clone()) {
+            filtered.push(t.clone());
         }
     }
     if filtered.is_empty() {
-        raw.into_iter()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect()
+        // Last resort: surface query order without stopword filtering.
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        for t in raw {
+            if seen.insert(t.clone()) {
+                out.push(t);
+            }
+        }
+        out.truncate(16);
+        out
     } else {
-        filtered.into_iter().take(16).collect()
+        filtered.truncate(16);
+        filtered
     }
 }
 
@@ -630,6 +651,10 @@ fn is_stopword(s: &str) -> bool {
 
 fn rank_search_spans(mut spans: Vec<Span>, query: &str, terms: &[String], k: usize) -> Vec<Span> {
     let phrase = query.to_ascii_lowercase();
+    // We keep the RRF score (set by `as_plan::rrf`) as the primary
+    // ranking signal — that's how multi-probe agreement is preserved.
+    // Term-overlap is recorded into `rank_signals.term_overlap` and
+    // used as a soft tiebreaker only.
     for span in &mut spans {
         let haystack = format!(
             "{}\n{}\n{}",
@@ -651,12 +676,32 @@ fn rank_search_spans(mut spans: Vec<Span>, query: &str, terms: &[String], k: usi
             })
             .unwrap_or(0);
         let phrase_boost = (!phrase.is_empty() && haystack.contains(&phrase)) as u8 as f32;
-        span.score = term_hits as f32 + (symbol_hits as f32 * 0.75) + phrase_boost;
+        let lexical_boost = term_hits as f32 + (symbol_hits as f32 * 0.75) + phrase_boost;
+        // Stash for explainability + record the boost as a tiebreaker
+        // in the existing `score` while preserving the RRF-fused base
+        // by adding (not replacing).
+        let signals = span.rank_signals.get_or_insert_with(Default::default);
+        signals.literal_match = Some(phrase_boost);
+        signals.term_overlap = Some(term_hits as u16);
+        span.score += lexical_boost * 0.05;
     }
     spans.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                let a_overlap = a
+                    .rank_signals
+                    .as_ref()
+                    .and_then(|s| s.term_overlap)
+                    .unwrap_or(0);
+                let b_overlap = b
+                    .rank_signals
+                    .as_ref()
+                    .and_then(|s| s.term_overlap)
+                    .unwrap_or(0);
+                b_overlap.cmp(&a_overlap)
+            })
             .then(a.uri.cmp(&b.uri))
             .then(a.line_range[0].cmp(&b.line_range[0]))
             .then(a.byte_range.start.cmp(&b.byte_range.start))
