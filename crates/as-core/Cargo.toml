@@ -1,11 +1,14 @@
 [package]
-name = "as-core"
+name = "agentic-search-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Core types, errors, and config for agentic-search"
+
+[lib]
+name = "as_core"
 
 [dependencies]
 thiserror = { workspace = true }

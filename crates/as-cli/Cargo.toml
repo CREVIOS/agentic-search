@@ -1,5 +1,5 @@
 [package]
-name = "as-cli"
+name = "agentic-search-cli"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

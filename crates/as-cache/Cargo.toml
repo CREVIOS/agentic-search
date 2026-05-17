@@ -1,11 +1,14 @@
 [package]
-name = "as-cache"
+name = "agentic-search-cache"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Turbopuffer-style tier cache (memory → NVMe → object store) for agentic-search"
+
+[lib]
+name = "as_cache"
 
 [dependencies]
 as-core = { workspace = true }

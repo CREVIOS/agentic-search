@@ -59,17 +59,23 @@ clap = { version = "4", features = ["derive"] }
 # Bench
 criterion = { version = "0.5", features = ["html_reports"] }
 
-# Internal
-as-core = { path = "crates/as-core" }
-as-store = { path = "crates/as-store" }
-as-fs = { path = "crates/as-fs" }
-as-grep = { path = "crates/as-grep" }
-as-ast = { path = "crates/as-ast" }
-as-cache = { path = "crates/as-cache" }
-as-embed = { path = "crates/as-embed" }
-as-vec = { path = "crates/as-vec" }
-as-plan = { path = "crates/as-plan" }
-as-server = { path = "crates/as-server" }
+# Internal — published on crates.io as `agentic-search-*` (the short
+# `as-*` names were taken). Each entry uses `package = "agentic-
+# search-X"` so the crates.io name and the workspace alias differ.
+# `[lib] name = "as_X"` inside each crate keeps the in-tree Rust
+# imports (`use as_core::*`) working without churn. `version` is
+# required alongside `path` so `cargo publish` can rewrite path deps
+# into crates.io-style version requirements.
+as-core = { package = "agentic-search-core", path = "crates/as-core", version = "0.1.0" }
+as-store = { package = "agentic-search-store", path = "crates/as-store", version = "0.1.0" }
+as-fs = { package = "agentic-search-fs", path = "crates/as-fs", version = "0.1.0" }
+as-grep = { package = "agentic-search-grep", path = "crates/as-grep", version = "0.1.0" }
+as-ast = { package = "agentic-search-ast", path = "crates/as-ast", version = "0.1.0" }
+as-cache = { package = "agentic-search-cache", path = "crates/as-cache", version = "0.1.0" }
+as-embed = { package = "agentic-search-embed", path = "crates/as-embed", version = "0.1.0" }
+as-vec = { package = "agentic-search-vec", path = "crates/as-vec", version = "0.1.0" }
+as-plan = { package = "agentic-search-plan", path = "crates/as-plan", version = "0.1.0" }
+as-server = { package = "agentic-search-server", path = "crates/as-server", version = "0.1.0" }
 
 [profile.release]
 opt-level = 3

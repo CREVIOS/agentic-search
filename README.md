@@ -65,8 +65,8 @@ The bottleneck is the **latency and ergonomics of the file tools the agent calls
 ### CLI (Rust)
 
 ```bash
-# install the `agentic-search` binary from the as-cli crate
-cargo install --git https://github.com/CREVIOS/agentic-search --locked as-cli
+# install the `agentic-search` binary from crates.io
+cargo install agentic-search-cli --locked
 agentic-search --version
 ```
 
@@ -75,7 +75,7 @@ Or build from source:
 ```bash
 git clone https://github.com/CREVIOS/agentic-search
 cd agentic-search
-cargo install --path crates/as-cli --locked
+cargo install --path crates/as-cli --locked   # builds agentic-search-cli locally
 ```
 
 Pre-built binaries for linux / darwin / windows (x86_64 + arm64) attach to every [GitHub Release](https://github.com/CREVIOS/agentic-search/releases).

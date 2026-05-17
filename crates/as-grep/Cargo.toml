@@ -1,11 +1,14 @@
 [package]
-name = "as-grep"
+name = "agentic-search-grep"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Ripgrep-as-library scanning + parallel prefix scan for agentic-search"
+
+[lib]
+name = "as_grep"
 
 [dependencies]
 as-core = { workspace = true }

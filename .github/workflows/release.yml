@@ -14,6 +14,7 @@ on:
 permissions:
   contents: write
   packages: write  # publish container images to GHCR
+  id-token: write  # PyPI trusted publishing (OIDC)
 
 jobs:
   # Resolve the ref every downstream job checks out so a manual
@@ -82,7 +83,7 @@ jobs:
           EOF
 
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }} -p as-cli
+        run: cargo build --release --locked --target ${{ matrix.target }} -p agentic-search-cli
 
       - name: Package (unix)
         if: runner.os != 'Windows'
@@ -140,9 +141,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      # version input intentionally omitted — package.json packageManager
+      # field drives the pnpm version (avoids ERR_PNPM_BAD_PM_VERSION).
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - name: Build + pack
         working-directory: sdks/node/agentic-search
         run: |
@@ -186,6 +187,95 @@ jobs:
             ghcr.io/${{ steps.owner.outputs.name }}/agentic-search:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # ---------- registry publishing ----------
+  # Each registry job is gated on its secret being set so the workflow
+  # still completes (and the GitHub Release still publishes) on a fresh
+  # repo before secrets are configured. Set the secrets in
+  # Settings → Secrets and variables → Actions before tagging the next
+  # version and the jobs will start uploading.
+
+  publish-crates:
+    name: Publish Rust crates → crates.io
+    needs: [resolve, build-cli]
+    runs-on: ubuntu-latest
+    if: ${{ vars.PUBLISH_CRATES == 'true' || secrets.CARGO_REGISTRY_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Publish in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Workspace dep order. Each `cargo publish` blocks until the
+          # crate is queryable from the index, so dependents resolve
+          # cleanly on the next step.
+          for crate in \
+            agentic-search-core \
+            agentic-search-embed \
+            agentic-search-store \
+            agentic-search-fs \
+            agentic-search-cache \
+            agentic-search-grep \
+            agentic-search-ast \
+            agentic-search-vec \
+            agentic-search-plan \
+            agentic-search-server \
+            agentic-search-cli ; do
+            echo "::group::publish $crate"
+            cargo publish -p "$crate" --locked --no-verify || {
+              echo "skip $crate (already published at this version?)"
+            }
+            # crates.io index has a small propagation delay; tolerate it.
+            sleep 20
+            echo "::endgroup::"
+          done
+
+  publish-pypi:
+    name: Publish Python SDKs → PyPI
+    needs: [resolve, build-python]
+    runs-on: ubuntu-latest
+    if: ${{ vars.PUBLISH_PYPI == 'true' || secrets.PYPI_API_TOKEN != '' }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-dists
+          path: dist/python
+      # Two paths:
+      #   - PYPI_API_TOKEN secret set → classic token upload via twine
+      #   - No token but PyPI trusted publishing configured → OIDC path
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/python
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
+
+  publish-npm:
+    name: Publish Node SDK → npm
+    needs: [resolve, build-node]
+    runs-on: ubuntu-latest
+    if: ${{ vars.PUBLISH_NPM == 'true' || secrets.NPM_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+      - uses: pnpm/action-setup@v4
+      - name: Build + publish
+        working-directory: sdks/node/agentic-search
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          pnpm install --frozen-lockfile=false
+          pnpm run build
+          # publishConfig.access in package.json forces public scope.
+          npm publish --access public
 
   release:
     name: GitHub Release

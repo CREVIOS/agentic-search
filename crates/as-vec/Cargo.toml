@@ -1,11 +1,14 @@
 [package]
-name = "as-vec"
+name = "agentic-search-vec"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Object-storage-native centroid (clustered) vector index for agentic-search"
+
+[lib]
+name = "as_vec"
 
 [dependencies]
 as-core = { workspace = true }

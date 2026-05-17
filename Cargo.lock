@@ -9,6 +9,228 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "agentic-search-ast"
+version = "0.1.0"
+dependencies = [
+ "agentic-search-core",
+ "agentic-search-grep",
+ "anyhow",
+ "hex",
+ "lru",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tracing",
+ "tree-sitter",
+ "tree-sitter-go",
+ "tree-sitter-javascript",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+]
+
+[[package]]
+name = "agentic-search-cache"
+version = "0.1.0"
+dependencies = [
+ "agentic-search-core",
+ "agentic-search-store",
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "filetime",
+ "futures",
+ "hex",
+ "lru",
+ "parking_lot",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "walkdir",
+]
+
+[[package]]
+name = "agentic-search-cli"
+version = "0.1.0"
+dependencies = [
+ "agentic-search-ast",
+ "agentic-search-cache",
+ "agentic-search-core",
+ "agentic-search-embed",
+ "agentic-search-fs",
+ "agentic-search-grep",
+ "agentic-search-plan",
+ "agentic-search-server",
+ "agentic-search-store",
+ "agentic-search-vec",
+ "anyhow",
+ "axum",
+ "bytes",
+ "clap",
+ "futures",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "agentic-search-core"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "agentic-search-embed"
+version = "0.1.0"
+dependencies = [
+ "agentic-search-core",
+ "anyhow",
+ "fastembed",
+ "serde",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "agentic-search-fs"
+version = "0.1.0"
+dependencies = [
+ "agentic-search-core",
+ "agentic-search-store",
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "flate2",
+ "futures",
+ "globset",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "agentic-search-grep"
+version = "0.1.0"
+dependencies = [
+ "agentic-search-core",
+ "agentic-search-fs",
+ "agentic-search-store",
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "futures",
+ "grep-regex",
+ "grep-searcher",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "agentic-search-plan"
+version = "0.1.0"
+dependencies = [
+ "agentic-search-ast",
+ "agentic-search-core",
+ "agentic-search-embed",
+ "agentic-search-fs",
+ "agentic-search-grep",
+ "agentic-search-store",
+ "agentic-search-vec",
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "futures",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "agentic-search-server"
+version = "0.1.0"
+dependencies = [
+ "agentic-search-ast",
+ "agentic-search-cache",
+ "agentic-search-core",
+ "agentic-search-fs",
+ "agentic-search-grep",
+ "agentic-search-plan",
+ "agentic-search-store",
+ "anyhow",
+ "async-trait",
+ "axum",
+ "bytes",
+ "futures",
+ "parking_lot",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "agentic-search-store"
+version = "0.1.0"
+dependencies = [
+ "agentic-search-core",
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "flate2",
+ "futures",
+ "memmap2",
+ "object_store",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "walkdir",
+]
+
+[[package]]
+name = "agentic-search-vec"
+version = "0.1.0"
+dependencies = [
+ "agentic-search-core",
+ "agentic-search-embed",
+ "agentic-search-store",
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "futures",
+ "lru",
+ "parking_lot",
+ "rayon",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -150,234 +372,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 
 [[package]]
-name = "as-ast"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "as-core",
- "as-grep",
- "hex",
- "lru",
- "parking_lot",
- "serde",
- "serde_json",
- "sha2",
- "tracing",
- "tree-sitter",
- "tree-sitter-go",
- "tree-sitter-javascript",
- "tree-sitter-python",
- "tree-sitter-rust",
- "tree-sitter-typescript",
-]
-
-[[package]]
-name = "as-cache"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "as-core",
- "as-store",
- "async-trait",
- "bytes",
- "filetime",
- "futures",
- "hex",
- "lru",
- "parking_lot",
- "sha2",
- "tempfile",
- "tokio",
- "tracing",
- "walkdir",
-]
-
-[[package]]
-name = "as-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "as-ast",
- "as-cache",
- "as-core",
- "as-embed",
- "as-fs",
- "as-grep",
- "as-plan",
- "as-server",
- "as-store",
- "as-vec",
- "axum",
- "bytes",
- "clap",
- "futures",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "as-core"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "as-embed"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "as-core",
- "fastembed",
- "serde",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "as-fs"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "as-core",
- "as-store",
- "async-trait",
- "bytes",
- "flate2",
- "futures",
- "globset",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "as-grep"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "as-core",
- "as-fs",
- "as-store",
- "async-trait",
- "bytes",
- "futures",
- "grep-regex",
- "grep-searcher",
- "hex",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "as-plan"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "as-ast",
- "as-core",
- "as-embed",
- "as-fs",
- "as-grep",
- "as-store",
- "as-vec",
- "async-trait",
- "bytes",
- "futures",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "as-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "as-ast",
- "as-cache",
- "as-core",
- "as-fs",
- "as-grep",
- "as-plan",
- "as-store",
- "async-trait",
- "axum",
- "bytes",
- "futures",
- "parking_lot",
- "reqwest",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "as-slice"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "516b6b4f0e40d50dcda9365d53964ec74560ad4284da2e7fc97122cd83174516"
 dependencies = [
  "stable_deref_trait",
-]
-
-[[package]]
-name = "as-store"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "as-core",
- "async-trait",
- "bytes",
- "flate2",
- "futures",
- "memmap2",
- "object_store",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "walkdir",
-]
-
-[[package]]
-name = "as-vec"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "as-core",
- "as-embed",
- "as-store",
- "async-trait",
- "bytes",
- "futures",
- "lru",
- "parking_lot",
- "rayon",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -517,13 +517,13 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 name = "bench"
 version = "0.1.0"
 dependencies = [
+ "agentic-search-core",
+ "agentic-search-embed",
+ "agentic-search-grep",
+ "agentic-search-plan",
+ "agentic-search-store",
+ "agentic-search-vec",
  "anyhow",
- "as-core",
- "as-embed",
- "as-grep",
- "as-plan",
- "as-store",
- "as-vec",
  "bytes",
  "criterion",
  "serde_json",

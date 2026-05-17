@@ -1,11 +1,14 @@
 [package]
-name = "as-server"
+name = "agentic-search-server"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "HTTP + MCP server exposing agentic-search to any agent runtime"
+
+[lib]
+name = "as_server"
 
 [dependencies]
 as-core = { workspace = true }

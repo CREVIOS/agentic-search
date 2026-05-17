@@ -1,11 +1,14 @@
 [package]
-name = "as-store"
+name = "agentic-search-store"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Object-store abstraction for agentic-search (S3/GCS/R2/local) with NVMe cache"
+
+[lib]
+name = "as_store"
 
 [dependencies]
 as-core = { workspace = true }

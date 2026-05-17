@@ -1,11 +1,14 @@
 [package]
-name = "as-plan"
+name = "agentic-search-plan"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Query planner: hybrid fusion (RRF) of grep + vector stages"
+
+[lib]
+name = "as_plan"
 
 [dependencies]
 as-core = { workspace = true }

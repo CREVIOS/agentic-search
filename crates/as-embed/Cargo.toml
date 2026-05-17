@@ -1,11 +1,14 @@
 [package]
-name = "as-embed"
+name = "agentic-search-embed"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Embedding wrapper for agentic-search (fastembed-rs / ONNX)"
+
+[lib]
+name = "as_embed"
 
 [dependencies]
 as-core = { workspace = true }
