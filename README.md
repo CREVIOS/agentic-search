@@ -233,21 +233,34 @@ Crate-level breakdown in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 - **Production security defaults.** Server binds `127.0.0.1` unless `--allow-public`. Path-escape rejection on every `file://` read. CI runs `cargo-deny`, `gitleaks`, `pip-audit` (5 Python adapters), `pnpm audit`, `govulncheck`.
 - **One binary, every agent.** MCP stdio + REST + Python (×5 adapters) + Node + Go SDKs + Docker image on GHCR. Wire-compatible with Claude Code, Cursor, Cline, Claude Desktop, OpenAI Agents SDK, LangChain, CrewAI, DeepAgents.
 
-## Working examples (real S3, real agents)
+## Working examples (real S3, real agents, real million-page corpus)
 
-Four end-to-end runs land in `examples/`, all against a 4 MB
-markdown corpus on a **local S3-compatible bucket** (RustFS):
+Seven end-to-end runs land in `examples/`, all against the **same
+10,843-file markdown corpus on a local S3-compatible bucket** (RustFS,
+real SigV4 wire protocol):
 
-| Example | Language | Surface | Live transcript |
-|---|---|---|---|
-| Claude Agent SDK | Python | MCP stdio | [transcript](examples/transcripts/claude_agent_sdk_run.md) |
-| DeepAgents | Python | REST | [transcript](examples/transcripts/deepagents_run.md) |
-| `@agentic-search/sdk` | TypeScript | REST | [transcript](examples/transcripts/node_and_go_run.md) |
-| `agenticsearch` Go SDK | Go | REST | [transcript](examples/transcripts/node_and_go_run.md) |
+| Surface | Language | Latency on 10k-file corpus | Notes |
+|---|---|---:|---|
+| CLI `agentic-search grep` | — | 412 ms | fresh process, cold-ish |
+| REST `/grep` (warm) | — | 132 ms | warm server |
+| Native Rust **in-process** | Rust | **238 ms** | no HTTP, no MCP |
+| Native Python (`agentic-search`) | Python | 6.2 s | REST client, 3 round-trips |
+| Node SDK (`@agentic-search/sdk`) | TypeScript | 11.7 s | REST, 3 round-trips |
+| Go SDK (`agenticsearch`) | Go | 15.7 s | REST, 3 round-trips |
+| Claude Agent SDK (Opus 4.7) | Python | 91 s | MCP stdio, 13 tool calls, grounded synthesis |
+| DeepAgents (Sonnet 4.6) | Python | 84 s | REST, grounded synthesis |
+
+**Full run report:**
+[`examples/transcripts/big_run_2026-05-18.md`](examples/transcripts/big_run_2026-05-18.md)
+— 10,843 .md files (Rust Book + Tokio tutorial + k8s concepts + MDN
+JS/Web API/CSS), timings on every surface, agent answers spot-checked
+back against the S3 bucket (every cited file exists, every quoted
+passage is a real substring at the agent-reported line numbers).
 
 Every run signs SigV4 requests against `http://localhost:19000`
 (swap the AWS env for real AWS keys and the same binary talks to
-real S3). Full setup + security model in [`examples/README.md`](examples/README.md).
+real S3). Full setup + security model in
+[`examples/README.md`](examples/README.md).
 
 ## Status
 

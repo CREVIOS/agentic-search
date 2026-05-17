@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build a realistic ~30 MB markdown corpus for the examples.
-# Sources are all public, MIT/Apache/CC-BY-SA-licensed docs.
+# Build a real ~1 GB / 10k+ markdown corpus for the examples.
+# Sources all public, CC-BY-SA / MIT / Apache-licensed docs.
 #
 # Output: examples/corpus/data/<source>/**/*.md
 set -euo pipefail
@@ -21,16 +21,28 @@ clone_sparse() {
   rm -rf /tmp/.corpus-clone
 }
 
-# 1. The Rust Book (~20 chapters, substantive technical prose).
+# 1. The Rust Book — ~20 chapters of substantive technical prose.
 clone_sparse https://github.com/rust-lang/book main src "$OUT/rust-book"
 
-# 2. Kubernetes concepts (huge, complex multi-doc reference).
+# 2. Kubernetes concepts — huge, complex multi-doc reference.
 clone_sparse https://github.com/kubernetes/website main \
   content/en/docs/concepts "$OUT/k8s-concepts"
 
-# 3. Tokio tutorial (async runtime walkthrough).
+# 3. Tokio tutorial — async runtime walkthrough.
 clone_sparse https://github.com/tokio-rs/website master \
   content/tokio/tutorial "$OUT/tokio-tutorial"
+
+# 4. MDN — web/javascript reference. Dominant source by file count.
+clone_sparse https://github.com/mdn/content main \
+  files/en-us/web/javascript "$OUT/mdn-javascript"
+
+# 5. MDN — web/api. Another large block.
+clone_sparse https://github.com/mdn/content main \
+  files/en-us/web/api "$OUT/mdn-webapi"
+
+# 6. MDN — web/css for a third major section.
+clone_sparse https://github.com/mdn/content main \
+  files/en-us/web/css "$OUT/mdn-css"
 
 du -sh "$OUT"/*  "$OUT"
 echo "files: $(find "$OUT" -name '*.md' | wc -l | tr -d ' ')"

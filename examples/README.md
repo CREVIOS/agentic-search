@@ -12,18 +12,21 @@ just pointed at `http://localhost:19000`.
 | `deepagents_corpus.py`                   | Python      | **REST**         | DeepAgents (Sonnet 4.6)      |
 | `node_corpus.ts`                         | TypeScript  | REST             | `@agentic-search/sdk`        |
 | `go_corpus/main.go`                      | Go          | REST             | `agenticsearch` Go SDK       |
+| `native_python_corpus.py`                | Python      | REST (no SDK)    | bare `agentic_search` client |
+| `native_rust/main.rs`                    | Rust        | **in-process**   | crate API, no server         |
 
 Captured transcripts of each live run are checked in under
 `transcripts/`:
 
+- **[big_run_2026-05-18.md](transcripts/big_run_2026-05-18.md) — the
+  full 10,843-file, real-S3, all-7-surfaces, timed + accuracy-checked
+  end-to-end report.** Read this one if you only read one.
 - [claude_agent_sdk_run.md](transcripts/claude_agent_sdk_run.md) —
-  multi-turn corpus comparison (graceful shutdown) with 9 MCP tool
-  calls and grounded citations.
-- [deepagents_run.md](transcripts/deepagents_run.md) —
-  backpressure / unbounded queue trade-off across 3 corpora.
-- [node_and_go_run.md](transcripts/node_and_go_run.md) — identical
-  span output from the TS and Go SDKs against the same `s3://`
-  corpus.
+  earlier 4 MB corpus run; Claude Opus 4.7 + 9 MCP tool calls.
+- [deepagents_run.md](transcripts/deepagents_run.md) — earlier 4 MB
+  corpus run; DeepAgents/Sonnet 4.6 over REST.
+- [node_and_go_run.md](transcripts/node_and_go_run.md) — Node + Go
+  SDK byte-identical output check.
 
 ## Run them locally
 
@@ -81,6 +84,20 @@ npx --yes tsx examples/node_corpus.ts
 
 # Go SDK over REST
 cd examples/go_corpus && go mod tidy && go run .
+
+# --- native paths (no MCP, no agent framework) ---
+
+# Python: just the REST client, no LLM, no agent SDK
+pip install agentic-search
+python examples/native_python_corpus.py
+
+# Rust: in-process — no HTTP, no MCP, embeds agentic-search crates
+cd examples/native_rust
+cargo run --release -- s3://agentic-search-it/corpus "graceful shutdown"
+
+# CLI: pipe-friendly grep against an s3:// prefix
+target/release/agentic-search grep \
+    s3://agentic-search-it/corpus 'graceful shutdown' --max-hits 5
 ```
 
 ## Security model — how this maps to production S3

@@ -57,10 +57,18 @@ async def main() -> int:
 
     from claude_agent_sdk import ClaudeAgentOptions, query
 
+    # Pass through the AWS env that scripts/rustfs-env.sh exports so
+    # the spawned server can sign S3 requests at the RustFS endpoint.
+    server_env = {
+        k: v
+        for k, v in os.environ.items()
+        if k.startswith("AWS_") or k in ("RUSTFS_S3_TEST",)
+    }
     server = {
         "type": "stdio",
         "command": str(BIN),
         "args": ["serve", "--mcp"],
+        "env": server_env,
     }
     tools = [
         "mcp__agentic_search__ls",
@@ -69,26 +77,36 @@ async def main() -> int:
         "mcp__agentic_search__find_symbol",
         "mcp__agentic_search__search",
     ]
+    # The corpus URI can be a local path or an S3-shaped URI. The
+    # examples/README ships the RustFS-backed s3:// setup; falls back
+    # to file:// when the env var isn't set.
+    corpus_uri = os.environ.get(
+        "AGENTIC_SEARCH_CORPUS", f"file://{CORPUS}"
+    )
     opts = ClaudeAgentOptions(
         mcp_servers={"agentic_search": server},
         allowed_tools=tools,
         system_prompt=(
-            "You are answering questions about a 4 MB local markdown "
-            f"corpus mounted at file://{CORPUS}. Always use the "
+            f"You are answering questions about a 10,843-file markdown "
+            f"corpus at {corpus_uri} covering: rust-lang/book (Rust "
+            "stdlib), tokio-rs/website (Tokio async runtime), "
+            "kubernetes/website (k8s concepts), mdn/content "
+            "(web/javascript, web/api, web/css). Always use the "
             "agentic_search MCP tools (grep, find_symbol, read) to "
             "ground every claim — never guess from training data. "
             "When citing, include the file path. Be concise."
         ),
-        max_turns=12,
+        max_turns=25,
     )
 
     prompt = (
-        "Across this corpus, compare how the Rust Book, the Tokio "
-        "tutorial, and the Kubernetes concepts docs each handle the "
-        "topic of *graceful shutdown* (Rust process exit, Tokio "
-        "runtime shutdown, k8s pod termination). For each, cite one "
-        "exact filename and one short quoted passage. End with a "
-        "two-sentence synthesis of what is common across all three."
+        "Across the corpus, find ONE concrete example each of how the "
+        "Rust async ecosystem, the Web Platform (MDN), and the "
+        "Kubernetes API model the same idea of *bounded queues with "
+        "backpressure*. For each, cite an exact filename and one "
+        "short quoted passage that shows the bound or backpressure "
+        "mechanism. End with a two-sentence synthesis of what is "
+        "common across all three."
     )
 
     print(f"== prompt ==\n{prompt}\n")

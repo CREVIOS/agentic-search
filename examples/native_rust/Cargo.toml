@@ -1,0 +1,24 @@
+# Intentionally excluded from the workspace so example code can
+# pin agentic-search-* deps independently (and so a `cargo install`
+# in the workspace doesn't try to package this demo).
+[workspace]
+
+[package]
+name = "agentic-search-native-rust-demo"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "native_rust_corpus"
+path = "main.rs"
+
+[dependencies]
+# In-process — no HTTP server, no MCP. Drive the planner directly.
+agentic-search-core = { path = "../../crates/as-core" }
+agentic-search-fs = { path = "../../crates/as-fs" }
+agentic-search-grep = { path = "../../crates/as-grep" }
+agentic-search-cache = { path = "../../crates/as-cache" }
+agentic-search-store = { path = "../../crates/as-store" }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
