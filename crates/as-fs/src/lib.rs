@@ -44,6 +44,22 @@ impl Fs {
         self.store.list(prefix)
     }
 
+    /// List via a pre-built prefix manifest when one is present, falling
+    /// back to live `list` otherwise. The manifest is a single GET so
+    /// cold-S3 listing collapses from paged `ListObjectsV2` to one
+    /// round-trip; we accept a small staleness window in exchange
+    /// (refresh via `agentic-search index-manifest`).
+    pub async fn list_with_manifest<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
+        if let Some((_, entries)) = as_store::manifest::read_manifest(&*self.store, prefix).await? {
+            let stream = futures::stream::iter(entries.into_iter().map(|e| Ok(e.to_object_meta())));
+            return Ok(stream.boxed());
+        }
+        Ok(self.store.list(prefix))
+    }
+
     /// List keys under `prefix` matching a glob pattern (relative to prefix).
     ///
     /// The pattern is matched against the *relative* portion of each key,

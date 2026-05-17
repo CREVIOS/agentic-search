@@ -104,6 +104,10 @@ enum Cmd {
         #[arg(long)]
         suite: Option<String>,
     },
+    /// Build a prefix manifest so cold `list` is one GET instead of
+    /// paged ListObjectsV2. Manifest is written to
+    /// `<uri>/.agentic-search/manifest.jsonl.gz`.
+    IndexManifest { uri: String },
 }
 
 fn open_fs(uri: &str) -> anyhow::Result<(Arc<Fs>, String)> {
@@ -360,6 +364,17 @@ async fn cmd_index(
     Ok(())
 }
 
+async fn cmd_index_manifest(uri: String) -> anyhow::Result<()> {
+    let (store, prefix) = as_store::open(&uri)?;
+    let header = as_store::manifest::write_manifest(&*store, &prefix).await?;
+    println!(
+        "manifest: {count} entries under {prefix:?} -> {uri}/.agentic-search/manifest.jsonl.gz",
+        count = header.count,
+        prefix = header.prefix,
+    );
+    Ok(())
+}
+
 async fn cmd_query(
     uri: String,
     namespace: String,
@@ -470,6 +485,7 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Bench { suite } => {
             println!("bench (M6) suite={suite:?}");
         }
+        Cmd::IndexManifest { uri } => cmd_index_manifest(uri).await?,
     }
     Ok(())
 }

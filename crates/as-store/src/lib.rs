@@ -41,6 +41,7 @@ pub trait Store: Send + Sync {
 pub type ArcStore = Arc<dyn Store>;
 
 pub mod local_mmap;
+pub mod manifest;
 pub mod object_store_impl;
 pub use local_mmap::LocalMmapStore;
 pub use object_store_impl::ObjectStoreImpl;
