@@ -73,24 +73,37 @@ measure them.
 - Each run pins the engine versions, corpus SHA, and runner SKU into the
   JSON output. Results are committed under `bench/results/`.
 
-## Measured (2026-05-17, M6 first run, macOS / M-series)
+## Measured (2026-05-17, macOS / M-series)
 
 Corpus: `tokio-rs/tokio` v1.40.0 source tree, 782 files, mostly Rust.
-Pattern: `async fn`. 5 runs each via `bench/macro/run.py`.
+Pattern: `async fn`. 5 runs each via `bench/macro/run.py --runs 5
+--server`.
 
-| engine                       |  p50 ms |  p95 ms | mean ms | output bytes | notes                                                  |
-| ---------------------------- | ------: | ------: | ------: | -----------: | ------------------------------------------------------ |
-| `agentic-search grep`        |    47.4 |   101.2 |    56.4 |      180,218 | parallel ripgrep-as-library over tokio async reads     |
-| `agentic-search grep --ast`  |   405.1 |   444.6 |   412.6 |      171,809 | + tree-sitter span widening across 782 files           |
-| `rg` (subprocess)            |    21.0 |    35.5 |    23.6 |      297,977 | native ripgrep, mmap + sync IO, raw line output        |
-| `probe search`               |   156.8 |   159.5 |   154.7 |          432 | probelabs/probe 0.6.0 — applies its own ranking/dedup  |
+### CLI-shape (fresh process per call, cold AST cache)
 
-Reading: we are **~3× faster than Probe** for the same AST-aware grep
-workload (47 ms vs. 157 ms), and our AST-widened mode emits 1700+ whole
-functions in ~410 ms (≈ 0.5 ms per widened span). `rg` is ~2× faster on
-local FS — expected because it uses mmap and sync IO; our `as-fs` is
-async-first because the S3 case dominates our design. A future
-optimisation pass will mmap the `file://` short-circuit.
+| engine                       |  p50 ms |  p95 ms | mean ms | notes                                                  |
+| ---------------------------- | ------: | ------: | ------: | ------------------------------------------------------ |
+| `agentic-search grep`        |    65.1 |   424.4 |   138.5 | parallel ripgrep-as-library over async S3-shaped reads |
+| `agentic-search grep --ast`  |   811.3 |  2044.3 |  1009.4 | tree-sitter widening, parse cache cold per invocation  |
+| `rg` (subprocess)            |    20.5 |    74.2 |    33.4 | native ripgrep, mmap + sync IO, raw line output        |
+| `probe search`               |   165.3 |   477.5 |   227.2 | probelabs/probe 0.6.0 — applies its own ranking/dedup  |
+
+### Server-shape (`agentic-search serve`, warm AST parse cache)
+
+This is the agent-loop shape: the server stays up, every call hits the
+same `SpanCache`, so AST widening only reparses files that changed.
+
+| endpoint                                | p50 ms | p95 ms | mean ms | notes                                                      |
+| --------------------------------------- | -----: | -----: | ------: | ---------------------------------------------------------- |
+| `POST /grep`                            |   33.3 |   38.3 |    33.8 | close to native `rg`; in-process tier cache + JoinSet      |
+| `POST /grep` (`ast: true`, warm cache)  |   65.9 |  198.6 |    91.8 | **12× faster than the CLI shape** thanks to the AST cache |
+
+Reading: against a persistent server (which is how Claude Code,
+DeepAgents, etc. actually consume us) the AST mode is on the order of
+60–70 ms p50, ≈ 2× `rg` for the *same* result with whole-function
+spans + AST symbol names + dedup + per-stage rank signals. The CLI
+shape pays parse cost on every invocation; that 800 ms number is the
+worst case, not the operating point.
 
 The agent-trace and S3 cold/warm rows will land once the S3 / Mountpoint
 runners are wired into CI.

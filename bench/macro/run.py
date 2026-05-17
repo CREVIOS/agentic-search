@@ -108,6 +108,94 @@ def upload_to_rustfs(corpus: Path, bucket: str, prefix: str) -> str:
     return f"s3://{bucket}/{prefix}"
 
 
+def bench_server(
+    corpus: Path,
+    pattern: str,
+    runs: int,
+    max_hits: int,
+) -> list[dict]:
+    """Bench `grep` and `grep --ast` against a persistent HTTP server.
+
+    Captures the AST parse cache benefit (the CLI path opens a fresh
+    cache per invocation so it always pays parse cost)."""
+    import socket
+    import time
+    import urllib.request
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    bind = f"127.0.0.1:{port}"
+    server = subprocess.Popen(
+        [str(BIN), "serve", "--bind", bind],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    base = f"http://{bind}"
+    try:
+        deadline = time.time() + 10.0
+        while time.time() < deadline:
+            try:
+                with urllib.request.urlopen(f"{base}/health", timeout=1):
+                    break
+            except Exception:
+                time.sleep(0.1)
+
+        def post(path: str, body: dict) -> bytes:
+            data = json.dumps(body).encode()
+            req = urllib.request.Request(
+                f"{base}{path}",
+                data=data,
+                headers={"content-type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return r.read()
+
+        def time_runs(body: dict, n: int) -> list[float]:
+            durations = []
+            payload_len = 0
+            for _ in range(n):
+                t0 = time.perf_counter()
+                payload = post("/grep", body)
+                durations.append(time.perf_counter() - t0)
+                payload_len = len(payload)
+            return durations, payload_len
+
+        rows = []
+        uri = f"file://{corpus}"
+        for label, ast in (
+            ("agentic-search /grep (server)", False),
+            ("agentic-search /grep --ast (server, warm AST cache)", True),
+        ):
+            durations, payload_len = time_runs(
+                {
+                    "uri": uri,
+                    "pattern": pattern,
+                    "max_hits": max_hits,
+                    "concurrency": 64,
+                    "ast": ast,
+                },
+                runs,
+            )
+            rows.append(
+                {
+                    "engine": label,
+                    "p50_ms": round(percentile(durations, 50) * 1000, 2),
+                    "p95_ms": round(percentile(durations, 95) * 1000, 2),
+                    "mean_ms": round(statistics.fmean(durations) * 1000, 2),
+                    "out_bytes": payload_len,
+                    "rc": 0,
+                }
+            )
+        return rows
+    finally:
+        server.terminate()
+        try:
+            server.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            server.kill()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", type=int, default=5)
@@ -117,6 +205,11 @@ def main() -> int:
         "--s3",
         action="store_true",
         help="Also benchmark against a local RustFS S3 endpoint",
+    )
+    ap.add_argument(
+        "--server",
+        action="store_true",
+        help="Also benchmark against a persistent agentic-search server (captures AST cache hits)",
     )
     ap.add_argument("--s3-bucket", default="agentic-search-it")
     ap.add_argument("--s3-prefix", default="tokio")
@@ -185,6 +278,8 @@ def main() -> int:
                 "rc": rc,
             }
         )
+    if args.server:
+        rows.extend(bench_server(corpus, args.pattern, args.runs, args.max_hits))
 
     width_name = max(len(r["engine"]) for r in rows)
     print(f"{'engine'.ljust(width_name)}  {'p50':>10}  {'p95':>10}  {'mean':>10}  {'out bytes':>12}  rc")
