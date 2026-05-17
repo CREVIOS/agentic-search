@@ -455,23 +455,60 @@ pub async fn search(
     if terms.is_empty() {
         return Ok(Json(GrepResponse::from_spans(Vec::new(), fmt)));
     }
-    let pattern = terms
+
+    // Fan out *multiple* grep probes in parallel and fuse spans rather
+    // than running a single OR-of-terms regex. The model picks one
+    // shape from the query (one "find" intent) but a single English
+    // phrase typically maps to several useful patterns:
+    //
+    //   - OR-of-tokens  (broad recall; what we had before)
+    //   - phrase        (literal whole-phrase match for exact quoting)
+    //   - first-term    (focused on the most distinctive token)
+    //
+    // Spans from the three probes are merged and re-ranked, capped at
+    // `k`. Probes that error out are dropped silently — the planner
+    // should never fail the whole call because one regex was odd.
+    let candidate_limit = req.k.saturating_mul(8).clamp(64, 2000);
+    let mut probes: Vec<String> = Vec::with_capacity(3);
+    let union = terms
         .iter()
         .map(|t| regex_escape(t))
         .collect::<Vec<_>>()
         .join("|");
-    let candidate_limit = req.k.saturating_mul(8).clamp(64, 2000);
-    let grep_req = GrepRequest {
-        uri: req.uri,
-        pattern,
-        case_insensitive: true,
-        max_hits: candidate_limit,
-        concurrency: 32,
-        ast: true,
-        response_format: ResponseFormat::Detailed,
-    };
-    let raw = run_grep(state, &grep_req).await?;
-    let ranked = rank_search_spans(raw, &req.query, &terms, req.k);
+    probes.push(union);
+    let phrase = req.query.trim();
+    if phrase.split_whitespace().count() > 1 {
+        probes.push(regex_escape(phrase));
+    }
+    if let Some(first) = terms.first() {
+        let term0 = regex_escape(first);
+        if !probes.iter().any(|p| p == &term0) {
+            probes.push(term0);
+        }
+    }
+
+    let mut joined: Vec<Vec<Span>> = Vec::with_capacity(probes.len());
+    for pattern in &probes {
+        let grep_req = GrepRequest {
+            uri: req.uri.clone(),
+            pattern: pattern.clone(),
+            case_insensitive: true,
+            max_hits: candidate_limit,
+            concurrency: 32,
+            ast: true,
+            response_format: ResponseFormat::Detailed,
+        };
+        match run_grep(state.clone(), &grep_req).await {
+            Ok(spans) => joined.push(spans),
+            Err(_) => continue,
+        }
+    }
+
+    // Dedup by span key, accumulate scores via RRF, then re-rank by
+    // per-term overlap so phrase matches win over noisy single-token
+    // hits in ties.
+    let fused = as_plan::rrf(&joined, 60, candidate_limit);
+    let ranked = rank_search_spans(fused, &req.query, &terms, req.k);
     Ok(Json(GrepResponse::from_spans(ranked, fmt)))
 }
 
