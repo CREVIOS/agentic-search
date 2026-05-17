@@ -33,7 +33,13 @@ pub fn rrf(lists: &[Vec<Span>], k: usize, top_k: usize) -> Vec<Span> {
         }
     }
     let mut out: Vec<(f32, Span)> = acc.into_values().collect();
-    out.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    // `total_cmp` gives a total ordering across NaN; fall back to the
+    // span's `dedup_key` so ties resolve deterministically across runs
+    // instead of inheriting HashMap iteration order.
+    out.sort_by(|a, b| {
+        b.0.total_cmp(&a.0)
+            .then_with(|| a.1.dedup_key().cmp(&b.1.dedup_key()))
+    });
     out.into_iter()
         .take(top_k)
         .map(|(score, mut span)| {
@@ -298,6 +304,24 @@ mod tests {
             kind: SpanKind::Line,
             score,
             ..Span::default()
+        }
+    }
+
+    #[test]
+    fn rrf_is_stable_under_ties() {
+        // Two single-item lists with no overlap → every doc has the
+        // same fused score (1/61). With HashMap iteration order being
+        // random, the output order must still be deterministic across
+        // runs via the dedup_key tiebreaker.
+        let lists: Vec<Vec<Span>> = (0..16)
+            .map(|i| vec![span(&format!("doc-{i:02}"), 1, 0.0)])
+            .collect();
+        let first = rrf(&lists, 60, 16);
+        for _ in 0..8 {
+            let next = rrf(&lists, 60, 16);
+            let first_uris: Vec<_> = first.iter().map(|s| s.uri.clone()).collect();
+            let next_uris: Vec<_> = next.iter().map(|s| s.uri.clone()).collect();
+            assert_eq!(first_uris, next_uris, "rrf order must be stable across runs");
         }
     }
 
