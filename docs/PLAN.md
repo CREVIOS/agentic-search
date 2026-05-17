@@ -1,137 +1,178 @@
-# agentic-search — ULTRAPLAN
+# agentic-search — PLAN (v2, post-research)
+
+> Reframed after the [research synthesis](RESEARCH.md). The original plan
+> assumed RAG-shaped retrieval was the bottleneck. The evidence says the
+> bottleneck for agentic workloads is *file-shaped, S3-native, parallel
+> grep with AST-aware spans* — not vector ANN. We now optimize for that.
 
 ## Mission
-Fastest agentic search substrate. S3-native filesystem for agents. Hybrid: ripgrep lexical + vector ANN + web search. Rust core. Bindings for Claude Agent SDK, DeepAgents, LangChain, CrewAI. Beat realtime SOTA on latency AND recall.
 
-## Why now
-- Agents stall on retrieval. Tool latency dominates loop. p50 search > p50 LLM token.
-- ChromaDB / Pinecone / Qdrant assume local FS or hosted cluster. None search S3 directly.
-- ripgrep is the fastest lexical scanner. Nobody wired it to agent toolcalls over object storage.
-- Agents need *file-like* semantics (open, glob, grep, read range) AND *semantic* (embed, ANN). Two paradigms, one tool.
+Be the **fastest substrate behind an agent's file tools**.
 
-## Differentiators (must hold all 4)
-1. **S3-as-FS**: zero local copy, range-read driven, prefix-glob native. Hot shards cached on NVMe with LRU.
-2. **Rust hot path**: zero-copy, mmap where possible, SIMD on tokenize + cosine. `ripgrep` as lib not subprocess. `tantivy` for inverted, `usearch`/`hnsw_rs` for ANN.
-3. **Hybrid first-class**: BM25 + dense + reranker fused in one query plan. Not stitched in Python.
-4. **SDK-agnostic toolcalls**: one binary, one HTTP+gRPC server, official adapters for Claude Agent SDK, DeepAgents, LangChain, CrewAI, MCP server.
+Agents already converge on `ls / glob / read / grep` (Claude Agent SDK,
+DeepAgents, Cursor, Codex CLI, Cline, …). They want those tools to (a) work
+directly on S3-class object storage, (b) return AST-aware spans instead of
+chunks, (c) fan out in parallel with sub-agent context isolation, (d)
+optionally enrich with web search and (e) optionally fall back to vector
+retrieval for non-code corpora.
 
-## Architecture (layers)
+`agentic-search` is the Rust runtime that does all of the above behind one
+MCP/REST surface and a thin per-SDK adapter.
+
+## Non-goals (deliberately not what we are)
+
+- We are **not** a general vector DB. Vector retrieval is opt-in, off by
+  default, and only really pays off for non-code / unstructured corpora.
+- We are **not** a web crawler.
+- We are **not** an agent framework. We are a backend for agent frameworks.
+- We do **not** ship our own embedding model. We embed externally and store.
+
+## Primary differentiators (must hold all five)
+
+1. **S3 is the filesystem.** Works on raw S3, R2, GCS, Mountpoint, and the
+   new S3 Files (NFS). No local copy step.
+2. **Ripgrep linked, not exec'd.** `grep-searcher` runs inside the binary;
+   no shell escaping, no process startup latency.
+3. **Tree-sitter spans, Probe-style.** Matches are expanded to whole
+   functions / classes / methods, not raw line ranges.
+4. **Tier-cached like Turbopuffer.** Object storage → NVMe LRU → memory. The
+   more an agent uses a prefix, the closer it lives to the CPU.
+5. **One binary, every SDK.** MCP server + REST + Python + Node bindings,
+   with first-party adapters for Claude Agent SDK, DeepAgents, LangChain,
+   CrewAI.
+
+## Architecture (new)
+
 ```
-┌────────────────────────────────────────────────────────┐
-│  SDK adapters: claude-agent-sdk, deepagents, langchain │
-│  + MCP server (stdio + http) + REST + gRPC             │
-├────────────────────────────────────────────────────────┤
-│  Query planner: BM25/Vec/Web fusion, RRF + reranker    │
-├──────────────┬──────────────┬──────────────┬───────────┤
-│  Lexical     │  Vector      │  Web         │  Files    │
-│  (tantivy +  │  (usearch    │  (brave/     │  (S3 FS,  │
-│   ripgrep)   │   HNSW)      │   serpapi)   │   range)  │
-├──────────────┴──────────────┴──────────────┴───────────┤
-│  Storage: object store (s3, r2, gcs), local NVMe cache │
-│  + manifest (parquet) + WAL                            │
-└────────────────────────────────────────────────────────┘
-```
-
-## Core crates (workspace)
-- `as-core` — types, errors, config
-- `as-store` — S3 client (`aws-sdk-s3`), GCS, R2, local. Range-read, multipart, async. Cache layer (`foyer` or hand-rolled LRU on NVMe).
-- `as-fs` — virtual filesystem over `as-store`. POSIX-ish (open, read_at, list, glob).
-- `as-lex` — ripgrep-as-lib (`grep-searcher`, `grep-regex`) + tantivy inverted index over S3-backed segments.
-- `as-vec` — embedding (BGE-small via candle / fastembed-rs), HNSW index (`usearch` FFI or `hnsw_rs`), quantization (PQ/SQ).
-- `as-web` — pluggable web search (Brave, Tavily, SerpAPI, Exa).
-- `as-rerank` — cross-encoder rerank (jina / bge-reranker via candle).
-- `as-plan` — query planner, RRF fusion, budget-aware.
-- `as-server` — axum HTTP + tonic gRPC + MCP stdio.
-- `as-cli` — `agentic-search` CLI: index, query, serve, bench.
-- `as-bindings-py` — pyo3 bindings.
-- `as-bindings-node` — napi-rs bindings.
-
-## SDK adapters (separate dirs)
-- `sdks/python/claude_agent_search/` — wraps as-bindings-py, exposes `tool()` decorated functions for Claude Agent SDK
-- `sdks/python/deepagents_search/` — DeepAgents-compatible tool spec
-- `sdks/python/langchain_agentic_search/` — Retriever + Tool
-- `sdks/node/@agentic-search/sdk/` — TS bindings
-- `mcp/` — MCP server (stdio + http) so any MCP client gets it for free
-
-## Performance targets (must beat)
-| Metric | Target | Baseline (Chroma local) |
-|---|---|---|
-| p50 hybrid query @ 10M docs | < 25ms | ~120ms |
-| p99 hybrid query @ 10M docs | < 80ms | ~600ms |
-| Cold S3 grep, 1GB prefix | < 800ms | n/a (no one does this) |
-| Warm S3 grep, 1GB prefix | < 60ms | n/a |
-| Index 1M docs (768-d) | < 90s | ~280s |
-| RAM @ 10M docs | < 4GB | ~12GB |
-| Recall@10 vs BM25-only | +18pp | — |
-| Recall@10 vs dense-only | +6pp | — |
-
-## Accuracy plan
-- Hybrid retrieval: BM25 (tantivy) ∪ dense (HNSW) → RRF (k=60) → cross-encoder rerank top-50 → return top-k.
-- Realtime updates: WAL append → in-memory delta index → background merge to S3.
-- Eval: BEIR subset (MS MARCO, NQ, HotpotQA, FiQA, SciFact), LongBench-Retrieval, custom agent-trace benchmark.
-
-## Benchmarks
-- `bench/` workspace crate using `criterion` for micro.
-- `bench/macro/` python harness: ingests BEIR, runs Chroma / Qdrant / Pinecone / agentic-search, dumps CSV + plots.
-- GitHub Actions matrix: nightly runs on `c7gd.4xlarge` and `m7i.2xlarge` (or just local M-series for v0).
-- Output: `bench/results/YYYY-MM-DD.json` + `benchmarks.md` table auto-updated.
-
-## Milestones
-- **M0 (today)**: repo skeleton, workspace, CI, README, license, plan doc, first commit batch. Stub crates with traits.
-- **M1**: `as-store` S3 + local impl. `as-fs` glob/read. CLI `agentic-search ls s3://...` and `grep`. Integration test against MinIO.
-- **M2**: `as-lex` tantivy + ripgrep wiring. Index command. Query command. BM25 working.
-- **M3**: `as-vec` fastembed + usearch. Hybrid + RRF in `as-plan`.
-- **M4**: `as-web` Brave adapter. `as-rerank` bge-reranker via candle.
-- **M5**: `as-server` axum + MCP stdio. `as-bindings-py`. Claude Agent SDK adapter.
-- **M6**: bench harness vs Chroma/Qdrant. Plots. README numbers.
-- **M7**: DeepAgents, LangChain, CrewAI adapters. Node bindings.
-- **M8**: realtime WAL + delta index. PQ quantization. SIMD cosine.
-
-## Risks / mitigations
-- S3 RTT dominates cold. Mitigation: aggressive prefetch, manifest co-location, NVMe LRU, range-read coalescing.
-- Embedding latency. Mitigation: fastembed-rs (ONNX runtime), batch GPU optional, pre-embed at ingest.
-- Reranker latency. Mitigation: skip for low-budget queries, run top-50 only, INT8.
-- Rust + Python + Node release matrix. Mitigation: maturin for py, napi for node, CI release wheels.
-
-## Repo layout
-```
-/
-├── Cargo.toml (workspace)
-├── crates/
-│   ├── as-core/
-│   ├── as-store/
-│   ├── as-fs/
-│   ├── as-lex/
-│   ├── as-vec/
-│   ├── as-web/
-│   ├── as-rerank/
-│   ├── as-plan/
-│   ├── as-server/
-│   ├── as-cli/
-│   ├── as-bindings-py/
-│   └── as-bindings-node/
-├── sdks/
-│   ├── python/
-│   └── node/
-├── mcp/
-├── bench/
-├── docs/
-│   ├── PLAN.md (this)
-│   ├── ARCHITECTURE.md
-│   └── BENCHMARKS.md
-├── .github/workflows/
-├── examples/
-├── README.md
-└── LICENSE (Apache-2.0)
+┌──────────────────────────────────────────────────────────────────┐
+│  SDK adapters  ·  Claude Agent SDK   DeepAgents   LangChain      │
+│                ·  CrewAI             Node SDK     MCP            │
+├──────────────────────────────────────────────────────────────────┤
+│  Tool surface  ·  ls  glob  read  grep  search  web  delegate    │
+├──────────────────────────────────────────────────────────────────┤
+│  Planner       ·  parallel fan-out  ·  dedup by span             │
+│                ·  RRF fuse (grep + ast + fname + web)            │
+├───────────────┬───────────────┬────────────────┬─────────────────┤
+│  Lexical      │  AST          │  Optional      │  Web            │
+│  (grep, BM25) │  (tree-sitter)│  vector        │  (Exa/Brave/    │
+│               │               │  (fastembed +  │   Tavily)       │
+│               │               │   HNSW)        │                 │
+├───────────────┴───────────────┴────────────────┴─────────────────┤
+│  Cache tier   ·  Memory LRU                                      │
+│               ·  NVMe LRU (foyer-style)                          │
+│               ·  Manifests (parquet) co-located with data        │
+├──────────────────────────────────────────────────────────────────┤
+│  Object store ·  s3  ·  r2  ·  gcs  ·  s3-files (NFS)  ·  file   │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-## Non-goals
-- Not a vector DB SaaS. Library + self-host server.
-- Not a general embedding model trainer.
-- Not a web crawler.
+## Workspace crates (revised)
 
-## Open questions (resolve as we go)
-- usearch (Apache-2.0 binding via FFI) vs `hnsw_rs` (pure Rust). Pick usearch for raw perf, fallback hnsw_rs.
-- Embedding default: BGE-small-en-v1.5 (384d, fast) vs Snowflake arctic-embed-s. Bench both.
-- Reranker default: bge-reranker-v2-m3 (multilingual, big) vs jina-reranker-tiny. Default tiny, opt-in big.
-- Auth model for S3: env / IAM / profile / explicit creds in config.
+- `as-core` — types, errors, config.
+- `as-store` — object-store abstraction (s3, gcs, r2, file, plus NFS-mounted
+  s3-files / mountpoint as a special-cased local path).
+- `as-fs` — POSIX-ish virtual filesystem; `ls`, `glob`, `read_at`.
+- `as-cache` — **new.** Memory + NVMe tier behind an LRU; cache keys are
+  `(store, key, range)` and `(query_hash, prefix)`.
+- `as-grep` — **renamed from as-lex.** Ripgrep-as-library (`grep-searcher`,
+  `grep-regex`), parallel scan, range-coalescing.
+- `as-ast` — **new.** Tree-sitter span extractor (Probe-style). Given a
+  match, return the enclosing function/class/method as a span.
+- `as-index` — **renamed from as-lex/tantivy.** Optional BM25 index for
+  unstructured corpora. Off by default for code.
+- `as-vec` — **demoted.** Opt-in (feature flag), off by default. fastembed +
+  HNSW for unstructured corpora only.
+- `as-web` — Exa default, Brave / Tavily fallback. Returns markdown +
+  highlights tuned for tokens.
+- `as-plan` — query planner. Parallel fan-out, dedup-by-span, RRF fusion of
+  the enabled stages, optional rerank.
+- `as-delegate` — **new.** Sub-agent isolation: spawns a search-only loop in
+  its own context window and returns a compressed result.
+- `as-server` — axum HTTP + MCP stdio + (M5+) gRPC.
+- `as-cli` — `agentic-search` CLI.
+- `as-bindings-py`, `as-bindings-node` — language bindings.
+
+The original `as-rerank` crate stays around but is no longer on the default
+hot path; it is only invoked when the planner sees a non-code corpus or the
+user explicitly asks for it.
+
+## Tool surface (what the agent sees)
+
+| Tool          | Description                                                            |
+| ------------- | ---------------------------------------------------------------------- |
+| `ls`          | List a prefix (`s3://bucket/prefix`).                                  |
+| `glob`        | Glob within a prefix; supports double-star.                            |
+| `read`        | Read bytes (full file or `[start, end]`).                              |
+| `grep`        | ripgrep over a prefix; returns AST-expanded spans.                     |
+| `find_symbol` | tree-sitter-only: locate a function/class/method by name.              |
+| `search`      | Planner-driven hybrid: grep + ast + fname (+ optional vector + web).   |
+| `web`         | Web-only: Exa/Brave/Tavily.                                            |
+| `delegate`    | Spawn a search-only subagent loop; return a compressed answer.         |
+
+All tools are streaming and parallel-safe; the planner fans out internally
+and returns a single deduplicated result block per call.
+
+## Performance targets (revised)
+
+| Metric                                              | Target  | Notes                              |
+| --------------------------------------------------- | ------- | ---------------------------------- |
+| Cold S3 grep, 1 GB prefix                           | < 800ms | manifest-prefetched, range-coalesced |
+| Warm S3 grep, 1 GB prefix (NVMe-hit)                | < 60ms  | tier cache                         |
+| Warm S3 grep, 1 GB prefix (memory-hit)              | < 12ms  | tier cache                         |
+| ripgrep-as-lib vs `rg` subprocess on same corpus    | ≥ 0.95× | within 5% of native                |
+| `find_symbol` over 100k-file repo                   | < 40ms  | tree-sitter cache                  |
+| Parallel fan-out: 12 grep queries vs 12 sequential  | ≥ 8×    | speedup from server-side parallel  |
+| `delegate` end-to-end vs raw agent loop             | -40%    | main-context tokens                |
+
+Recall is workload-dependent. Where we ship vector, we will publish numbers
+against BEIR subsets; where we ship grep+AST, we will publish numbers
+against an internal coding-agent trace suite + SWE-bench retrieval slice.
+
+## Milestones (revised)
+
+- **M0** ✅ Repo skeleton, workspace, CI, license, plan, research doc.
+- **M1** — `as-store` (s3 + local) + `as-fs` (ls/glob/read). CLI verbs.
+  MinIO integration test.
+- **M2** — `as-grep` (ripgrep-as-lib) + `as-ast` (tree-sitter spans) +
+  parallel fan-out in `as-plan`. **This is the headline release.**
+- **M3** — `as-cache` (memory + NVMe tier). Manifests on object store.
+  Realtime invalidation hooks.
+- **M4** — `as-web` (Exa default) + `as-delegate` (subagent loop). MCP
+  stdio + axum REST in `as-server`.
+- **M5** — Python bindings + Claude Agent SDK adapter + MCP config helper.
+- **M6** — Benchmarks vs Probe, vs `rg`-via-Bash, vs ChromaDB (where
+  vector-on, comparable corpus), vs Exa (web). Numbers published.
+- **M7** — DeepAgents + LangChain + CrewAI + Node bindings.
+- **M8** — Optional `as-vec` polish (PQ, SIMD cosine, WAL/delta). Only if
+  the data shows it pays off for non-code workloads we care about.
+
+## Risks (revised)
+
+- **S3 RTT dominates cold path.** Mitigation: manifest prefetch, NVMe LRU,
+  range coalescing — same playbook Turbopuffer uses for vectors.
+- **Tree-sitter grammar surface is huge.** Ship the top-10 languages first
+  (Rust, TS, JS, Python, Go, Java, C, C++, Ruby, PHP); use plain ripgrep
+  spans as fallback for the rest.
+- **Probe is well-loved.** Differentiate on S3, MCP, and tier cache; don't
+  pretend Probe doesn't exist.
+- **MCP / Claude Agent SDK churn.** Pin the adapter packages to specific
+  protocol versions; bump on a release schedule, not nightly.
+
+## Open questions
+
+- Default tree-sitter span granularity: function-level vs class-level vs
+  configurable? (Lean: function-level with `--span class` flag.)
+- Cache key for `grep`: `(prefix, pattern_hash)` vs `(prefix, file_hash,
+  pattern_hash)`. The former is cheaper and probably fine.
+- For S3 Files (NFS), should we route through the `Store` trait or treat it
+  as a local FS shortcut? (Lean: detect and shortcut; the perf gap is too
+  big to ignore.)
+- Bench-corpus license. SWE-bench has a permissive split; check before we
+  commit data.
+
+## Out of scope for v1
+
+- Distributed query (multi-node) — single-binary scale-up first.
+- Embedding training or fine-tuning.
+- Authn / authz beyond IAM passthrough.
+- A hosted product.

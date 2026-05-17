@@ -1,109 +1,141 @@
 # agentic-search
 
-> Fastest agentic search substrate. S3-native filesystem for agents. Hybrid lexical + vector + web. Rust core, Python/Node bindings, MCP + REST + gRPC.
+> The fastest substrate behind an agent's file tools. S3-native `ls / glob /
+> read / grep` with tree-sitter spans, parallel fan-out, sub-agent isolation,
+> and an MCP server every agent runtime can talk to. Optional vector / web
+> search for the cases where they help.
 
 [![CI](https://github.com/CREVIOS/agentic-search/actions/workflows/ci.yml/badge.svg)](https://github.com/CREVIOS/agentic-search/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-## What
+## Why this exists
 
-`agentic-search` is a search runtime built for AI agents. It treats S3 (or any
-object store) as the agent's filesystem and gives the agent **one** tool surface
-that spans:
+By 2026 the major coding agents — Claude Code, Cursor, Codex CLI, Devin,
+Aider, OpenCode, Continue — have all converged on the same retrieval shape:
 
-- **`ls`/`glob`/`read_at`** — POSIX-ish access to S3/GCS/R2 prefixes, no local sync
-- **`grep`** — ripgrep-as-library scans over object-store ranges (no subprocess)
-- **`lexical` (BM25)** — tantivy inverted index, segments live in the store
-- **`vector` (ANN)** — fastembed + HNSW, optional product quantization
-- **`web`** — Brave / Tavily / SerpAPI / Exa adapters
-- **`hybrid`** — RRF fusion of any subset, plus cross-encoder rerank
+```text
+agent → parallel(grep, glob, read) → tree-sitter spans → reason → repeat
+```
 
-All wired into a single planner with a budget-aware execution model.
+No vector index, no embeddings on the hot path, no RAG. Anthropic explicitly
+[replaced](https://robertheubanks.substack.com/p/anthropic-replaced-their-rag-pipeline)
+their RAG pipeline with this loop after measuring it. See
+[`docs/RESEARCH.md`](docs/RESEARCH.md) for the receipts.
 
-## Why
+The bottleneck moved. It is now the *speed and ergonomics of the file tools*
+the agent calls — especially when the agent's "filesystem" is an S3 bucket.
 
-Modern agent loops are bottlenecked by retrieval. Existing vector DBs
-(Chroma/Pinecone/Qdrant) assume a local FS or a hosted cluster and bolt on
-lexical as an afterthought. None of them let an agent point at `s3://corpus/`
-and search **right there** with hybrid retrieval and the speed of native
-ripgrep.
+`agentic-search` is the runtime built for that shape.
 
-`agentic-search` is opinionated about three things:
+## What it does
 
-1. **S3 is the filesystem.** Agents never have to "sync." Range reads, prefix
-   manifests, NVMe LRU cache.
-2. **Rust on the hot path.** Tokenization, BM25, ANN, cosine — all native, all
-   SIMD where it matters. Ripgrep linked as a library, not exec'd.
-3. **One binary, every SDK.** Official adapters for the Claude Agent SDK,
-   DeepAgents, LangChain, CrewAI. MCP server out of the box.
+- **S3 is the filesystem.** Works on raw S3, R2, GCS, [Mountpoint for
+  S3](https://github.com/awslabs/mountpoint-s3), and the new
+  [S3 Files (NFS)](https://aws.amazon.com/blogs/aws/launching-s3-files-making-s3-buckets-accessible-as-file-systems/).
+  No local sync step.
+- **Ripgrep linked, not exec'd.** `grep-searcher` runs inside the binary; no
+  shell escaping, no process startup tax.
+- **Tree-sitter spans** ([Probe](https://github.com/probelabs/probe)-style).
+  Matches are expanded to whole functions / classes / methods so the agent
+  gets context that compiles, not a half-cut chunk.
+- **Tier cache** in the spirit of [Turbopuffer](https://turbopuffer.com/):
+  object → NVMe LRU → memory. Warm queries get close to local-FS speed.
+- **Parallel fan-out + dedup** on the server. The agent makes one call, the
+  server issues 12 grep/AST queries in parallel and returns a single
+  deduplicated result.
+- **Sub-agent `delegate` endpoint.** Search-only subagent runs in its own
+  context window and returns a compressed answer (Anthropic's
+  [+90% multi-agent finding](https://www.anthropic.com/engineering/multi-agent-research-system)).
+- **Optional vector + web** for cases the grep loop doesn't cover. Vector is
+  off by default; web defaults to Exa with Brave / Tavily fallback.
+- **One binary, every SDK.** MCP server + REST + Python + Node bindings. First-
+  party adapters for Claude Agent SDK, DeepAgents, LangChain, CrewAI.
 
 ## Status
 
-Pre-alpha. Public from day one. See [`docs/PLAN.md`](docs/PLAN.md) for the
-roadmap (M0 → M8) and [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) for the
-performance bar we are aiming to clear.
+Pre-alpha. Public from day one. M0 (skeleton + research synthesis + CI) is
+in. M1 (`as-store` + `as-fs` + CLI verbs) is up next. See
+[`docs/PLAN.md`](docs/PLAN.md) for the milestones and
+[`docs/RESEARCH.md`](docs/RESEARCH.md) for why the plan looks the way it
+does.
 
-## Quickstart
+## Quickstart (target shape — wiring in progress)
 
 ```bash
-# install (once we ship a release binary)
 cargo install --path crates/as-cli
 
-# list an S3 prefix as a filesystem
-agentic-search ls s3://my-corpus/docs/
+# treat an S3 prefix as a working directory
+agentic-search ls    s3://my-corpus/docs/
+agentic-search glob  s3://my-corpus/docs/ "**/*.md"
+agentic-search grep  s3://my-corpus/         "TODO\\(security\\)"
+agentic-search find  s3://my-repo/src/       --symbol verify_jwt
 
-# grep across that prefix without downloading anything locally
-agentic-search grep s3://my-corpus/docs/ "TODO\\(security\\)"
-
-# build a hybrid (BM25 + vector) index
-agentic-search index s3://my-corpus/docs/ --out s3://my-corpus/.index/
-
-# query
-agentic-search query s3://my-corpus/.index/ "kerberos token rotation" -k 10
-
-# serve HTTP + MCP for an agent
-agentic-search serve --bind 0.0.0.0:8787
+# expose all of the above to any MCP client
+agentic-search serve --mcp
 ```
 
-### From the Claude Agent SDK
+### Inside the Claude Agent SDK
 
 ```python
 from claude_agent_sdk import ClaudeAgentOptions, query
-from claude_agent_search import as_tools  # ships in sdks/python/
+from claude_agent_search import mcp_server_config, as_tools
 
 opts = ClaudeAgentOptions(
-    mcp_servers={"agentic_search": {"command": "agentic-search", "args": ["serve", "--mcp"]}},
+    mcp_servers=mcp_server_config(),
     allowed_tools=as_tools(),
 )
-async for msg in query(prompt="Find every place we still use HS256 in s3://corp/", options=opts):
+
+async for msg in query(
+    prompt="Find every place we still use HS256 in s3://corp/ and summarize.",
+    options=opts,
+):
     print(msg)
+```
+
+### Inside DeepAgents
+
+```python
+from deepagents import create_deep_agent
+from deepagents_search import search_tool
+
+agent = create_deep_agent(tools=[search_tool()])
 ```
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  SDK adapters: claude-agent-sdk · deepagents · langchain     │
-│  + MCP server (stdio + http) + REST + gRPC                   │
-├──────────────────────────────────────────────────────────────┤
-│  Query planner: BM25 / Vec / Web fusion (RRF) + reranker     │
-├──────────────┬──────────────┬──────────────┬─────────────────┤
-│  Lexical     │  Vector      │  Web         │  Files          │
-│  tantivy +   │  fastembed   │  Brave /     │  S3 / GCS / R2  │
-│  ripgrep     │  + HNSW      │  Tavily      │  range-read FS  │
-├──────────────┴──────────────┴──────────────┴─────────────────┤
-│  Object store + NVMe LRU cache + manifest (parquet) + WAL    │
-└──────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  SDK adapters  ·  Claude Agent SDK  DeepAgents  LangChain  CrewAI│
+├──────────────────────────────────────────────────────────────────┤
+│  Tool surface  ·  ls  glob  read  grep  find_symbol  search  web │
+│                ·  delegate (sub-agent isolation)                 │
+├──────────────────────────────────────────────────────────────────┤
+│  Planner       ·  parallel fan-out  ·  dedup by span             │
+├───────────────┬───────────────┬────────────────┬─────────────────┤
+│  Grep         │  AST          │  Optional      │  Web            │
+│  (rg-as-lib)  │  (tree-sitter)│  vector (off)  │  (Exa/Brave/    │
+│               │               │                │   Tavily)       │
+├───────────────┴───────────────┴────────────────┴─────────────────┤
+│  Tier cache   ·  memory LRU  →  NVMe LRU  →  manifests           │
+├──────────────────────────────────────────────────────────────────┤
+│  Object store ·  s3 · r2 · gcs · s3-files · mountpoint · file    │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the layered design and
-the per-crate responsibility split.
+Crate-level breakdown lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Benchmarks
 
-We track latency and recall against Chroma, Qdrant, and Pinecone on BEIR
-subsets and a custom agent-trace workload. Results land in
-[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) and `bench/results/`.
+We target three numbers above all:
+
+1. **Warm S3 grep < 60 ms** on a 1 GB prefix.
+2. **Cold S3 grep < 800 ms** on a 1 GB prefix.
+3. **Within 5% of native ripgrep** on identical local corpora.
+
+Plus parallel-fan-out scaling (12 grep queries should land in ≤1.25× the time
+of one), `find_symbol` recall on a coding-agent trace suite, and
+`delegate(query)` token economy vs. raw agent loops. Full numbers in
+[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) once M6 lands.
 
 ## License
 
