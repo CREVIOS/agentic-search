@@ -52,6 +52,7 @@ pub struct Tiered {
     upstream: ArcStore,
     cfg: TierConfig,
     mem: Mutex<MemoryLru>,
+    store_id: String,
 }
 
 struct MemoryLru {
@@ -103,15 +104,27 @@ impl Tiered {
             let _ = std::fs::create_dir_all(d);
         }
         let mem = Mutex::new(MemoryLru::new(cfg.memory_entries, cfg.memory_bytes));
-        Self { upstream, cfg, mem }
+        let store_id = upstream.describe();
+        Self {
+            upstream,
+            cfg,
+            mem,
+            store_id,
+        }
     }
 
+    /// Cache keys must include store identity so two distinct stores
+    /// (e.g. `s3://bucket-a` and `s3://bucket-b`) with the same in-bucket
+    /// key never collide on the same cache slot.
     fn cache_key_full(&self, key: &str) -> String {
-        format!("full:{key}")
+        format!("full:{}:{key}", self.store_id)
     }
 
     fn cache_key_range(&self, key: &str, range: &Range<u64>) -> String {
-        format!("range:{key}:{}-{}", range.start, range.end)
+        format!(
+            "range:{}:{key}:{}-{}",
+            self.store_id, range.start, range.end
+        )
     }
 
     fn nvme_path(&self, cache_key: &str) -> Option<PathBuf> {

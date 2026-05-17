@@ -42,7 +42,8 @@ struct RpcError {
     message: String,
 }
 
-const PROTOCOL_VERSION: &str = "2024-11-05";
+// Latest MCP spec version supported.
+const PROTOCOL_VERSION: &str = "2025-11-25";
 
 pub async fn run() -> anyhow::Result<()> {
     let state = Arc::new(AppState::default());
@@ -57,6 +58,7 @@ pub async fn run() -> anyhow::Result<()> {
         let req: RpcRequest = match serde_json::from_str(&line) {
             Ok(r) => r,
             Err(e) => {
+                // Parse error → JSON-RPC requires id = null in this case.
                 let resp = RpcResponse {
                     jsonrpc: "2.0",
                     id: Value::Null,
@@ -71,28 +73,47 @@ pub async fn run() -> anyhow::Result<()> {
             }
         };
         if req.jsonrpc != "2.0" {
-            let resp = error_resp(req.id.clone(), -32600, "jsonrpc must be 2.0");
-            write_line(&mut stdout, &resp).await?;
+            // Only respond if it had an id (otherwise it was a notification).
+            if req.id.is_some() {
+                let resp = error_resp(req.id.clone(), -32600, "jsonrpc must be 2.0");
+                write_line(&mut stdout, &resp).await?;
+            }
             continue;
         }
-        let id = req.id.clone().unwrap_or(Value::Null);
+        // JSON-RPC 2.0: notifications have no `id`. Per the spec, the server
+        // MUST NOT send any response for a notification. We still dispatch
+        // so internal state can react (e.g. `notifications/initialized`).
+        let is_notification = req.id.is_none();
+        let id_for_response = req.id.clone().unwrap_or(Value::Null);
         let result = handle(state.clone(), req).await;
+        if is_notification {
+            // Silently drop errors from notification handlers; clients
+            // would never read them anyway.
+            continue;
+        }
         let resp = match result {
             Ok(v) => RpcResponse {
                 jsonrpc: "2.0",
-                id,
+                id: id_for_response,
                 result: Some(v),
                 error: None,
             },
-            Err(e) => RpcResponse {
-                jsonrpc: "2.0",
-                id,
-                result: None,
-                error: Some(RpcError {
-                    code: -32000,
-                    message: e.to_string(),
-                }),
-            },
+            Err(e) => {
+                // Map specific failure modes to the correct JSON-RPC error
+                // codes. Unknown method = -32601; everything else = -32000.
+                let msg = e.to_string();
+                let code = if msg.starts_with("method not found") {
+                    -32601
+                } else {
+                    -32000
+                };
+                RpcResponse {
+                    jsonrpc: "2.0",
+                    id: id_for_response,
+                    result: None,
+                    error: Some(RpcError { code, message: msg }),
+                }
+            }
         };
         write_line(&mut stdout, &resp).await?;
     }
@@ -106,6 +127,9 @@ async fn handle(state: Arc<AppState>, req: RpcRequest) -> anyhow::Result<Value> 
             "serverInfo": { "name": "agentic-search", "version": env!("CARGO_PKG_VERSION") },
             "capabilities": { "tools": {} }
         })),
+        // Notifications: just ack. We never reply because `run` already
+        // suppresses responses for messages without `id`.
+        "notifications/initialized" | "initialized" => Ok(Value::Null),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tools_manifest() })),
         "tools/call" => tools_call(state, req.params).await,

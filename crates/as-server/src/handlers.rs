@@ -168,15 +168,25 @@ pub async fn find(
     Json(req): Json<FindRequest>,
 ) -> Result<Json<GrepResponse>, AppError> {
     let pattern = format!(r"\b{}\b", regex_escape(&req.symbol));
+    let symbol = req.symbol.clone();
     let grep_req = GrepRequest {
         uri: req.uri,
         pattern,
         case_insensitive: false,
-        max_hits: req.max_hits,
+        // Overshoot the max so we have slack after AST verification drops
+        // call sites / comment hits / partial matches.
+        max_hits: req.max_hits.saturating_mul(4),
         concurrency: req.concurrency,
         ast: true,
     };
-    grep(State(state), Json(grep_req)).await
+    let raw = grep(State(state), Json(grep_req)).await?;
+    // Only keep AST-widened spans whose tree-sitter name field matches the
+    // exact requested symbol. This drops comment / string / call-site hits
+    // that grep alone surfaces.
+    let mut spans = raw.0.spans;
+    spans.retain(|s| s.symbol.as_deref() == Some(symbol.as_str()));
+    spans.truncate(req.max_hits);
+    Ok(Json(GrepResponse { spans }))
 }
 
 /// `/search` is the planner-fronted endpoint. v1 implements it as grep+AST
