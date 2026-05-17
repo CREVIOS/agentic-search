@@ -51,3 +51,6 @@ bench/data/
 *.tantivy/
 *.hnsw
 *.usearch
+
+# Claude Code runtime
+.claude/
