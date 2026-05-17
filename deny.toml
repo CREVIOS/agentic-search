@@ -11,7 +11,16 @@ no-default-features = false
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+ignore = [
+    # Pulled in transitively by `tantivy` (as-index, opt-in non-default
+    # path). Replace by upstream tantivy upgrade when available.
+    "RUSTSEC-2024-0384", # instant unmaintained
+    "RUSTSEC-2024-0436", # paste unmaintained (via tantivy)
+    "RUSTSEC-2025-0119", # number_prefix unmaintained (via tantivy)
+    # AES overflow panic — affects only servers that enable overflow
+    # checks; reqwest/rustls chain pulls it. Watch for upstream patch.
+    "RUSTSEC-2025-0009",
+]
 
 [licenses]
 version = 2
@@ -29,12 +38,37 @@ allow = [
     "CC0-1.0",
     "0BSD",
     "MPL-2.0",
+    # NCSA is permissive (BSD-like); shows up via `(MIT OR Apache-2.0)
+    # AND NCSA` from ort-sys (ONNX Runtime FFI), which we use for
+    # local embeddings.
+    "NCSA",
+    # webpki-roots etc. use CDLA-Permissive-2.0 for the bundled
+    # CA list. Permissive, redistribution allowed.
+    "CDLA-Permissive-2.0",
+    # `ring` bundles its license file as "ISC AND OpenSSL"; the
+    # OpenSSL clause covers crypto code paths we ship as binary.
+    "OpenSSL",
 ]
 confidence-threshold = 0.93
 
+# ring carries a bespoke license. Treat its in-tree LICENSE file as
+# equivalent to ISC + OpenSSL for the purposes of this project.
+[[licenses.clarify]]
+name = "ring"
+expression = "ISC AND OpenSSL"
+license-files = [
+    { path = "LICENSE", hash = 0xbd0eed23 },
+]
+
 [bans]
 multiple-versions = "allow"
-wildcards = "deny"
+# Workspace-internal `{ workspace = true }` deps register as `*` to
+# cargo-deny, and crates with `repository = ...` are considered
+# "public" so `allow-wildcard-paths` does not exempt them. The
+# crates themselves are not on crates.io yet; downgrade to a warning
+# until we publish.
+wildcards = "warn"
+allow-wildcard-paths = true
 highlight = "all"
 deny = []
 skip = []
