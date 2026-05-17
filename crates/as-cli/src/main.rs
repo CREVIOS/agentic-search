@@ -421,6 +421,7 @@ async fn cmd_query(
         vec_index: vec_index.as_ref(),
         vec_probe: probe,
         vec_store: None,
+        budgets: as_plan::StageBudgets::default(),
     };
     let spans = Planner::search(plan).await?;
     print_spans(&spans);

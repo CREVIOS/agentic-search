@@ -77,6 +77,42 @@ pub struct PlanInputs<'a> {
     pub vec_index: Option<&'a VecIndex>,
     pub vec_probe: usize,
     pub vec_store: Option<ArcStore>,
+    /// Per-stage wall-time budget. A stage that misses its deadline is
+    /// dropped with a `dropped: true` entry in `PlanResult::stages`
+    /// rather than failing the whole call.
+    pub budgets: StageBudgets,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct StageBudgets {
+    pub grep: std::time::Duration,
+    pub vector: std::time::Duration,
+}
+
+impl Default for StageBudgets {
+    fn default() -> Self {
+        Self {
+            grep: std::time::Duration::from_millis(2_500),
+            vector: std::time::Duration::from_millis(1_500),
+        }
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct StageStat {
+    pub stage: &'static str,
+    pub ms: u128,
+    pub hits: usize,
+    /// `true` if the stage was dropped from fusion (timed out or errored).
+    pub dropped: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct PlanResult {
+    pub spans: Vec<Span>,
+    pub stages: Vec<StageStat>,
 }
 
 pub struct Planner;
@@ -126,41 +162,129 @@ impl Planner {
         Ok(vec_hits_to_spans(hits))
     }
 
-    /// Fuse the requested stages with RRF and return the top-k spans.
+    /// Run each stage under its own deadline and fuse with RRF.
+    /// Stages that miss their deadline (or error out) are dropped from
+    /// fusion and reported via `PlanResult::stages` instead of failing
+    /// the whole call. The headline `search` wrapper returns just the
+    /// span list for back-compat; `search_with_stats` exposes the full
+    /// `PlanResult` so callers can surface per-stage telemetry.
     pub async fn search(inputs: PlanInputs<'_>) -> Result<Vec<Span>> {
+        Ok(Self::search_with_stats(inputs).await?.spans)
+    }
+
+    pub async fn search_with_stats(inputs: PlanInputs<'_>) -> Result<PlanResult> {
         let mut lists: Vec<Vec<Span>> = Vec::new();
+        let mut stages: Vec<StageStat> = Vec::new();
 
         // Stage 1: grep over the prefix. Always runs.
-        let grep = Self::grep_stage(
-            inputs.fs.clone(),
-            inputs.grep_prefix,
-            inputs.query,
-            inputs.grep_max_hits,
-            inputs.grep_concurrency,
+        let grep_started = std::time::Instant::now();
+        match tokio::time::timeout(
+            inputs.budgets.grep,
+            Self::grep_stage(
+                inputs.fs.clone(),
+                inputs.grep_prefix,
+                inputs.query,
+                inputs.grep_max_hits,
+                inputs.grep_concurrency,
+            ),
         )
-        .await?;
-        if !grep.is_empty() {
-            lists.push(grep);
+        .await
+        {
+            Ok(Ok(spans)) => {
+                stages.push(StageStat {
+                    stage: "grep",
+                    ms: grep_started.elapsed().as_millis(),
+                    hits: spans.len(),
+                    dropped: spans.is_empty(),
+                    error: None,
+                });
+                if !spans.is_empty() {
+                    lists.push(spans);
+                }
+            }
+            Ok(Err(e)) => stages.push(StageStat {
+                stage: "grep",
+                ms: grep_started.elapsed().as_millis(),
+                hits: 0,
+                dropped: true,
+                error: Some(e.to_string()),
+            }),
+            Err(_) => stages.push(StageStat {
+                stage: "grep",
+                ms: grep_started.elapsed().as_millis(),
+                hits: 0,
+                dropped: true,
+                error: Some(format!(
+                    "budget {}ms exceeded",
+                    inputs.budgets.grep.as_millis()
+                )),
+            }),
         }
 
         // Stage 2: vector ANN over the namespace, if available.
         if let Some(index) = inputs.vec_index {
-            let embedder = Embedder::new(index.manifest.embed_model.clone())
-                .or_else(|_| Embedder::new(Model::default()))?;
-            let vec = Self::vec_stage(
-                index,
-                &embedder,
-                inputs.query,
-                inputs.k * 2,
-                inputs.vec_probe,
-            )
-            .await?;
-            if !vec.is_empty() {
-                lists.push(vec);
+            let vec_started = std::time::Instant::now();
+            let embedder_res = Embedder::new(index.manifest.embed_model.clone())
+                .or_else(|_| Embedder::new(Model::default()));
+            match embedder_res {
+                Ok(embedder) => {
+                    match tokio::time::timeout(
+                        inputs.budgets.vector,
+                        Self::vec_stage(
+                            index,
+                            &embedder,
+                            inputs.query,
+                            inputs.k * 2,
+                            inputs.vec_probe,
+                        ),
+                    )
+                    .await
+                    {
+                        Ok(Ok(spans)) => {
+                            stages.push(StageStat {
+                                stage: "vector",
+                                ms: vec_started.elapsed().as_millis(),
+                                hits: spans.len(),
+                                dropped: spans.is_empty(),
+                                error: None,
+                            });
+                            if !spans.is_empty() {
+                                lists.push(spans);
+                            }
+                        }
+                        Ok(Err(e)) => stages.push(StageStat {
+                            stage: "vector",
+                            ms: vec_started.elapsed().as_millis(),
+                            hits: 0,
+                            dropped: true,
+                            error: Some(e.to_string()),
+                        }),
+                        Err(_) => stages.push(StageStat {
+                            stage: "vector",
+                            ms: vec_started.elapsed().as_millis(),
+                            hits: 0,
+                            dropped: true,
+                            error: Some(format!(
+                                "budget {}ms exceeded",
+                                inputs.budgets.vector.as_millis()
+                            )),
+                        }),
+                    }
+                }
+                Err(e) => stages.push(StageStat {
+                    stage: "vector",
+                    ms: vec_started.elapsed().as_millis(),
+                    hits: 0,
+                    dropped: true,
+                    error: Some(format!("embedder init: {e}")),
+                }),
             }
         }
 
-        Ok(rrf(&lists, 60, inputs.k))
+        Ok(PlanResult {
+            spans: rrf(&lists, 60, inputs.k),
+            stages,
+        })
     }
 }
 
@@ -186,5 +310,52 @@ mod tests {
         let r = rrf(&[a, b], 60, 4);
         // y is the only doc ranked top-2 in both lists; should win.
         assert_eq!(r[0].uri, "y");
+    }
+
+    #[tokio::test]
+    async fn budget_drops_slow_grep_stage() {
+        use as_store::open;
+        use bytes::Bytes;
+        use tempfile::tempdir;
+        // Sub-millisecond grep budget on a fresh corpus → grep is virtually
+        // guaranteed to miss its deadline, but the planner must report a
+        // dropped stage rather than fail.
+        let dir = tempdir().unwrap();
+        let uri = format!("file://{}", dir.path().display());
+        let (store, _) = open(&uri).unwrap();
+        for i in 0..16 {
+            store
+                .put(
+                    &format!("docs/{i}.md"),
+                    Bytes::from(format!("# doc {i} fnord async fn body").into_bytes()),
+                )
+                .await
+                .unwrap();
+        }
+        let fs = Arc::new(Fs::new(store));
+        let result = Planner::search_with_stats(PlanInputs {
+            fs,
+            grep_prefix: "docs",
+            query: "async fn body",
+            k: 4,
+            grep_max_hits: 32,
+            grep_concurrency: 4,
+            vec_index: None,
+            vec_probe: 1,
+            vec_store: None,
+            budgets: StageBudgets {
+                grep: std::time::Duration::from_nanos(1),
+                vector: std::time::Duration::from_secs(1),
+            },
+        })
+        .await
+        .unwrap();
+        let stage = result
+            .stages
+            .iter()
+            .find(|s| s.stage == "grep")
+            .expect("grep stage");
+        assert!(stage.dropped, "grep should be dropped under sub-µs budget");
+        assert!(stage.error.as_deref().unwrap_or("").contains("budget"));
     }
 }
