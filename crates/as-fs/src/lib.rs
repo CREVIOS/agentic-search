@@ -15,22 +15,6 @@ pub struct Fs {
     store: ArcStore,
 }
 
-/// Internal state for the streaming manifest unfold. Kept here so the
-/// closure inside `list_with_manifest` stays an `async move` and not
-/// some borrow-tangle over a tuple.
-struct ManifestStreamState {
-    iter: as_store::manifest::ManifestIter,
-    pending: Option<as_store::manifest::ManifestEntry>,
-    yielded: usize,
-    expected: usize,
-    /// Sticky terminator. Once the underlying iterator hits EOF (or
-    /// errors) we set this so the unfold never re-polls — a single
-    /// truncation error is yielded *once*, then the stream ends.
-    /// Without this, the truncation path repeats forever because
-    /// `next_entry` returns `Ok(None)` indefinitely after EOF.
-    done: bool,
-}
-
 impl Fs {
     pub fn new(store: ArcStore) -> Self {
         Self { store }
@@ -66,73 +50,56 @@ impl Fs {
     /// round-trip; we accept a small staleness window in exchange
     /// (refresh via `agentic-search index-manifest`).
     ///
-    /// Robustness: a manifest whose body is truncated (gzip decoder
-    /// raises an error mid-stream, *or* the iterator yields fewer
-    /// entries than the header claimed) is treated as broken. Rather
-    /// than returning a partial corpus, we fall through to live
-    /// `list` so search never silently misses files because the
-    /// manifest upload was interrupted.
+    /// Robustness: any manifest defect — body truncation, mid-stream
+    /// gzip CRC error, short entry count vs. header — causes us to
+    /// fall through to live `list` *before* a single manifest entry
+    /// is exposed to the caller. Search never silently returns a
+    /// partial corpus because the manifest upload was interrupted.
+    ///
+    /// Cost: we pre-drain the iterator into a `Vec<ManifestEntry>`
+    /// (bounded by `header.count`) before streaming, so peak memory
+    /// for the manifest is `count * sizeof(ManifestEntry)` rather
+    /// than a single entry. For million-entry manifests this is on
+    /// the order of 100 MB, well below the bytes we already had to
+    /// hold in memory for the gzipped manifest GET itself.
     pub async fn list_with_manifest<'a>(
         &'a self,
         prefix: &'a str,
     ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
         match as_store::manifest::stream_manifest(&*self.store, prefix).await? {
             Some((header, mut iter)) => {
-                // Pull one entry up front so a header-only manifest
-                // (count > 0 but no body) is detected before the
-                // caller commits to using it. We accept this tiny
-                // eager read — it's one line out of a gzipped JSONL —
-                // because the correctness win is large.
-                let first = match iter.next_entry() {
-                    Ok(opt) => opt,
-                    Err(e) => {
-                        tracing::warn!(error = %e, "manifest body unreadable, falling back to live list");
-                        return Ok(self.store.list(prefix));
-                    }
-                };
                 let expected = header.count as usize;
-                if expected > 0 && first.is_none() {
-                    tracing::warn!("manifest body empty despite count={}; live list", expected);
+                let mut entries: Vec<as_store::manifest::ManifestEntry> =
+                    Vec::with_capacity(expected.min(1_000_000));
+                loop {
+                    match iter.next_entry() {
+                        Ok(Some(e)) => entries.push(e),
+                        Ok(None) => break,
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "manifest body unreadable mid-stream; falling back to live list",
+                            );
+                            return Ok(self.store.list(prefix));
+                        }
+                    }
+                }
+                if expected > 0 && entries.len() < expected {
+                    tracing::warn!(
+                        expected,
+                        got = entries.len(),
+                        "manifest truncated (short count); falling back to live list",
+                    );
                     return Ok(self.store.list(prefix));
                 }
-                let state = ManifestStreamState {
-                    iter,
-                    pending: first,
-                    yielded: 0,
-                    expected,
-                    done: false,
-                };
-                let stream = futures::stream::unfold(state, |mut s| async move {
-                    if s.done {
-                        return None;
-                    }
-                    if let Some(p) = s.pending.take() {
-                        s.yielded += 1;
-                        return Some((Ok(p.to_object_meta()), s));
-                    }
-                    match s.iter.next_entry() {
-                        Ok(Some(entry)) => {
-                            s.yielded += 1;
-                            Some((Ok(entry.to_object_meta()), s))
-                        }
-                        Ok(None) => {
-                            if s.expected > 0 && s.yielded < s.expected {
-                                s.done = true;
-                                let err = Error::Other(format!(
-                                    "manifest truncated: yielded {} of {} entries",
-                                    s.yielded, s.expected
-                                ));
-                                Some((Err(err), s))
-                            } else {
-                                None
-                            }
-                        }
-                        Err(e) => {
-                            s.done = true;
-                            Some((Err(e), s))
-                        }
-                    }
-                });
+                // Manifest is whole. Stream entries from the Vec; the
+                // unfold owns it so the caller sees a normal listing
+                // stream.
+                let stream = futures::stream::iter(
+                    entries
+                        .into_iter()
+                        .map(|e| Ok::<_, Error>(e.to_object_meta())),
+                );
                 Ok(stream.boxed())
             }
             None => Ok(self.store.list(prefix)),
@@ -173,13 +140,14 @@ mod tests {
     use super::*;
     use futures::StreamExt;
 
-    /// A consumer that "logs and continues" (the as-grep pattern) must
-    /// finish in bounded time even when the manifest is truncated.
-    /// Before the `done` sticky flag was added, an EOF below the
-    /// expected count yielded `Err` forever and the loop never
-    /// terminated.
+    /// A short-count manifest must trigger fallback to live `list`,
+    /// not a partial corpus. The previous fix only terminated the
+    /// stream after one error — `as-grep`'s "log and continue"
+    /// consumer would then return whatever entries did make it
+    /// through. Now we drain the manifest fully, detect the short
+    /// count, and live-list the real keys.
     #[tokio::test]
-    async fn truncated_manifest_stream_terminates() {
+    async fn truncated_manifest_falls_back_to_live_list() {
         use bytes::Bytes;
         use std::io::Write;
         use tempfile::tempdir;
@@ -187,17 +155,19 @@ mod tests {
         let uri = format!("file://{}", dir.path().display());
         let (store, _) = as_store::open(&uri).unwrap();
 
-        // Build a fake manifest gzipped JSONL that claims count=10
-        // but only carries 2 body entries.
+        // Real files in the prefix: a, b, c.
+        for k in ["docs/a.md", "docs/b.md", "docs/c.md"] {
+            store.put(k, Bytes::from_static(b"x")).await.unwrap();
+        }
+
+        // Fake manifest claims count=10 but only carries 1 body entry.
         let header = serde_json::json!({
             "v": 1, "prefix": "docs", "generated_at": 0, "count": 10
         });
-        let entry1 = serde_json::json!({"key": "docs/a.md", "size": 1});
-        let entry2 = serde_json::json!({"key": "docs/b.md", "size": 1});
+        let entry = serde_json::json!({"key": "docs/a.md", "size": 1});
         let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         writeln!(gz, "{header}").unwrap();
-        writeln!(gz, "{entry1}").unwrap();
-        writeln!(gz, "{entry2}").unwrap();
+        writeln!(gz, "{entry}").unwrap();
         let bytes = gz.finish().unwrap();
         store
             .put("docs/.agentic-search/manifest.jsonl.gz", Bytes::from(bytes))
@@ -206,18 +176,63 @@ mod tests {
 
         let fs = Fs::new(store);
         let mut stream = fs.list_with_manifest("docs").await.unwrap();
-        let mut oks = 0usize;
-        let mut errs = 0usize;
-        let mut polls = 0usize;
+        let mut keys: Vec<String> = Vec::new();
         while let Some(item) = stream.next().await {
-            polls += 1;
-            assert!(polls < 1_000, "stream did not terminate; polls={polls}");
-            match item {
-                Ok(_) => oks += 1,
-                Err(_) => errs += 1,
+            let meta = item.expect("fallback list should not surface manifest errors");
+            keys.push(meta.key);
+        }
+        keys.sort();
+        // After fallback, we get the real corpus (a/b/c plus the
+        // manifest file itself; `read_manifest` skips manifest, but
+        // live list does include it). Just assert the three real
+        // docs are present — fallback worked.
+        assert!(keys.contains(&"docs/a.md".to_string()), "{keys:?}");
+        assert!(keys.contains(&"docs/b.md".to_string()), "{keys:?}");
+        assert!(keys.contains(&"docs/c.md".to_string()), "{keys:?}");
+    }
+
+    /// Mid-stream JSON parse failure (corrupt body) is also a
+    /// fallback trigger, not a one-error stream.
+    #[tokio::test]
+    async fn corrupt_manifest_body_falls_back() {
+        use bytes::Bytes;
+        use std::io::Write;
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let uri = format!("file://{}", dir.path().display());
+        let (store, _) = as_store::open(&uri).unwrap();
+        store
+            .put("docs/real.md", Bytes::from_static(b"x"))
+            .await
+            .unwrap();
+
+        // Header is valid but the body contains a bad line. The
+        // streaming reader tolerates bad lines (logs and skips), so
+        // this case actually produces fewer entries than `count`
+        // and is caught by the short-count check.
+        let header = serde_json::json!({
+            "v": 1, "prefix": "docs", "generated_at": 0, "count": 3
+        });
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        writeln!(gz, "{header}").unwrap();
+        writeln!(gz, "this is not json").unwrap();
+        writeln!(gz, "nor is this").unwrap();
+        let bytes = gz.finish().unwrap();
+        store
+            .put("docs/.agentic-search/manifest.jsonl.gz", Bytes::from(bytes))
+            .await
+            .unwrap();
+
+        let fs = Fs::new(store);
+        let mut stream = fs.list_with_manifest("docs").await.unwrap();
+        let mut saw_real = false;
+        while let Some(item) = stream.next().await {
+            if let Ok(m) = item {
+                if m.key == "docs/real.md" {
+                    saw_real = true;
+                }
             }
         }
-        assert_eq!(oks, 2, "should yield both real entries");
-        assert_eq!(errs, 1, "should yield exactly one truncation error");
+        assert!(saw_real, "fallback live list must include the real file");
     }
 }

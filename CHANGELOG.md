@@ -31,8 +31,8 @@ First public release. Core agent-loop search path is production-ready.
   `(GRAMMAR_VERSION, lang_id, content_hash)`, `widen_with_cache_cancellable`
   for cooperative cancel.
 - **Centroid vector index** (`as-vec`, Turbopuffer-shaped): k-means
-  clusters live on object storage, queries are 2 roundtrips, cluster cache
-  is an `LruCache(4096)`.
+  clusters live on object storage, queries are 2 roundtrips, cluster
+  cache is a bounded LRU (default 256 decoded clusters).
 - **fastembed-rs** (`as-embed`): BGE-small-en-v1.5 (384d ONNX).
 - **Planner** (`as-plan`): parallel fan-out via `tokio::JoinSet`, per-stage
   budgets, RRF (k=60) fusion preserving `source_stage`.
