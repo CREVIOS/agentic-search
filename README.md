@@ -2,7 +2,7 @@
 
 > Fastest agentic search substrate. S3-native filesystem for agents. Hybrid lexical + vector + web. Rust core, Python/Node bindings, MCP + REST + gRPC.
 
-[![CI](https://github.com/claudemakebell/agentic-search/actions/workflows/ci.yml/badge.svg)](https://github.com/claudemakebell/agentic-search/actions/workflows/ci.yml)
+[![CI](https://github.com/CREVIOS/agentic-search/actions/workflows/ci.yml/badge.svg)](https://github.com/CREVIOS/agentic-search/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 ## What

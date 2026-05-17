@@ -37,8 +37,8 @@ version = "0.0.1"
 edition = "2021"
 rust-version = "1.78"
 license = "Apache-2.0"
-repository = "https://github.com/claudemakebell/agentic-search"
-homepage = "https://github.com/claudemakebell/agentic-search"
+repository = "https://github.com/CREVIOS/agentic-search"
+homepage = "https://github.com/CREVIOS/agentic-search"
 authors = ["agentic-search contributors"]
 
 [workspace.dependencies]
